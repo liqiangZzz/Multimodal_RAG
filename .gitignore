@@ -1,0 +1,112 @@
+# =====================================================================
+# LangChainEmbedding .gitignore
+#
+# 原则：只把「源码 + 文档 + 输入数据」推到远端，
+#      凡是能由代码重新生成的、或含密钥的、或本地环境相关的，一律不入库。
+# =====================================================================
+
+# ---------- Python 缓存 ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ---------- 虚拟环境 ----------
+# 本项目实际用的是 conda 环境 langchain-embedding，不在项目目录内；
+# 这里只为防止误提交项目内的 .venv / venv
+venv/
+.venv/
+env/
+ENV/
+venv.bak/
+
+# ---------- 环境变量 / 密钥（绝不入库）----------
+.env
+.env.*
+# 例外：.env.example 是模板，需要入库（注意 .gitignore 不支持行尾注释，
+# 注释必须单独一行，否则整行会被当成文件名模式）
+!.env.example
+
+# ---------- IDE / 编辑器 ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---------- macOS 垃圾文件 ----------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+
+# ---------- 测试 / 静态检查缓存 ----------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---------- Python 打包构建产物 ----------
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+sdist/
+wheels/
+pip-wheel-metadata/
+MANIFEST
+
+# ---------- Jupyter ----------
+.ipynb_checkpoints/
+
+# ---------- LangGraph dev server 运行时数据 ----------
+.langgraph_api/
+
+# ---------- 日志 ----------
+*.log
+logs/
+
+# =====================================================================
+# 模型权重 —— 不入库
+#
+# 模型走 HuggingFace 标准缓存（~/.cache/huggingface/hub/），不在项目目录里，
+# 因此 models/ 下只有 Python 代码，无需忽略。
+# 获取模型：python embedding_demo/download_model_embedding.py
+#
+# 若用 HF_HOME 把缓存指定到项目内（HF_HOME=$PWD/.cache/huggingface），
+# 会被下面的 .cache/ 规则忽略。
+# =====================================================================
+.cache/
+# 万一有人把权重直接下载到项目目录，兜底拦掉（这几个都是 GB 级）
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.gguf
+*.onnx
+
+# =====================================================================
+# 运行时生成的数据 —— 不入库，跑脚本即可重建
+# =====================================================================
+# 向量库落盘数据
+chroma_db/
+faiss_db/
+*.faiss
+*.pkl
+
+# 06Embedding案例.py 生成的向量化结果（1000 条 × 1024 维，约 1.2MB）
+# 重新生成：取消注释该脚本 main 里的 embedding_to_file(...) 再跑一次
+datas/output_embedding.csv
+
+# 一次性诊断报告（内容已并入 README.md，无需入库；若想保留请删掉这行）
+vector_db/milvus/multi_model/multimodel_demo_diagnosis.txt
+
+# ---------- WorkBuddy 本地工作目录（会话记录，非项目源码）----------
+.workbuddy/
+.workbuddy-ai/
