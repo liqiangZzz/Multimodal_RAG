@@ -1,4 +1,4 @@
-conda create -n Multimodal_RAG python=3.13 -y
+conda create -n Multimodal_RAG python=3.11 -y
 
 conda activate Multimodal_RAG
 
