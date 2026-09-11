@@ -1,14 +1,13 @@
-from PIL import Image
+import json
+from io import BytesIO
 from typing import Dict, List
 
 import fitz
-from io import BytesIO
-import json
+from PIL import Image
 
-from dots_ocr.utils.image_utils import smart_resize
 from dots_ocr.utils.consts import MIN_PIXELS, MAX_PIXELS
+from dots_ocr.utils.image_utils import smart_resize
 from dots_ocr.utils.output_cleaner import OutputCleaner
-
 
 # Define a color map (using RGBA format)
 dict_layout_type_to_color = {

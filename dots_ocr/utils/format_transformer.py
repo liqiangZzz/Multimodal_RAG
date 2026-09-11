@@ -1,9 +1,7 @@
-import os
-import sys
-import json
 import re
 
 from PIL import Image
+
 from dots_ocr.utils.image_utils import PILimage_to_base64
 
 

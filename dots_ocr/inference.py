@@ -1,12 +1,9 @@
-import json
-import io
-import base64
-import math
-from PIL import Image
-import requests
-from dots_ocr.utils.image_utils import PILimage_to_base64
-from openai import OpenAI
 import os
+
+import requests
+from openai import OpenAI
+
+from dots_ocr.utils.image_utils import PILimage_to_base64
 
 
 def inference_with_vllm(

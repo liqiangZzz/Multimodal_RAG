@@ -10,12 +10,11 @@ Features:
 """
 
 import json
-import re
 import os
-from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass
-from collections import Counter
+import re
 import traceback
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional, Any
 
 
 @dataclass

@@ -1,14 +1,16 @@
-import math
 import base64
-from PIL import Image
-from typing import Tuple
+import copy
+import math
 import os
-from dots_ocr.utils.consts import IMAGE_FACTOR, MIN_PIXELS, MAX_PIXELS
-from dots_ocr.utils.doc_utils import fitz_doc_to_image
 from io import BytesIO
+from typing import Tuple
+
 import fitz
 import requests
-import copy
+from PIL import Image
+
+from dots_ocr.utils.consts import IMAGE_FACTOR, MIN_PIXELS, MAX_PIXELS
+from dots_ocr.utils.doc_utils import fitz_doc_to_image
 
 
 def round_by_factor(number: int, factor: int) -> int:

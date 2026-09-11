@@ -1,8 +1,7 @@
-import fitz
-import numpy as np
 import enum
+
+import fitz
 from pydantic import BaseModel, Field
-from PIL import Image
 
 
 class SupportedPdfParseMethod(enum.Enum):
