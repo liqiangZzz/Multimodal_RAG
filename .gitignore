@@ -72,41 +72,15 @@ MANIFEST
 *.log
 logs/
 
-# =====================================================================
-# 模型权重 —— 不入库
-#
-# 模型走 HuggingFace 标准缓存（~/.cache/huggingface/hub/），不在项目目录里，
-# 因此 models/ 下只有 Python 代码，无需忽略。
-# 获取模型：python embedding_demo/download_model_embedding.py
-#
-# 若用 HF_HOME 把缓存指定到项目内（HF_HOME=$PWD/.cache/huggingface），
-# 会被下面的 .cache/ 规则忽略。
-# =====================================================================
-.cache/
-# 万一有人把权重直接下载到项目目录，兜底拦掉（这几个都是 GB 级）
-*.safetensors
-*.bin
-*.pt
-*.pth
-*.gguf
-*.onnx
+#---------- 图片 ----------
+images/
 
-# =====================================================================
-# 运行时生成的数据 —— 不入库，跑脚本即可重建
-# =====================================================================
-# 向量库落盘数据
-chroma_db/
-faiss_db/
-*.faiss
-*.pkl
-
-# 06Embedding案例.py 生成的向量化结果（1000 条 × 1024 维，约 1.2MB）
-# 重新生成：取消注释该脚本 main 里的 embedding_to_file(...) 再跑一次
-datas/output_embedding.csv
-
-# 一次性诊断报告（内容已并入 README.md，无需入库；若想保留请删掉这行）
-vector_db/milvus/multi_model/multimodel_demo_diagnosis.txt
-
-# ---------- WorkBuddy 本地工作目录（会话记录，非项目源码）----------
-.workbuddy/
-.workbuddy-ai/
+# ---------- 例外：以下目录必须入库，禁止被任何规则过滤 ----------
+# data/  是输入数据（PDF 等），output/ 是解析结果，都需要提交到远端。
+# 放在文件末尾，确保后置否定（!）能覆盖前面所有匹配规则。
+!data/
+!data/**/
+!data/**
+!output/
+!output/**/
+!output/**
