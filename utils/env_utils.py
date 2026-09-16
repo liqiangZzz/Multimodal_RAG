@@ -18,15 +18,17 @@ from dotenv import load_dotenv
 # 又不会用 .env 里的占位符覆盖 PyCharm 传入的真实值。
 load_dotenv(override=False)
 
-
 # =====================================================================
 # 2. 导出模型配置
 # =====================================================================
 # API 密钥
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 GLM_API_KEY = os.getenv('GLM_API_KEY')
+ALIBABA_API_KEY = os.getenv('ALIBABA_API_KEY')
 
 # URL
 DEEPSEEK_BASE_URL = os.getenv('DEEPSEEK_BASE_URL')
 GLM_BASE_URL = os.getenv('GLM_BASE_URL')
 
+MILVUS_URI = os.getenv('MILVUS_URI', 'http://localhost:19530')
+MILVUS_COLLECTION_NAME = os.getenv('MILVUS_COLLECTION_NAME', 't_doc_collection')
