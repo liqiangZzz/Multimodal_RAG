@@ -8,7 +8,7 @@ import time
 # 1. 配置区 (想下载别的模型，修改这里即可)
 # =====================================================================
 # 模型在 HuggingFace 上的仓库 ID
-REPO_ID = "Qwen/Qwen3-VL-Embedding-2B"
+REPO_ID = "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct"
 
 # 用于判断缓存是否命中的标志性文件
 KEY_FILE = "config.json"
@@ -64,8 +64,7 @@ def main():
         print(f"       rm -rf ~/.cache/huggingface/hub/models--{REPO_ID.replace('/', '--')}")
         return cached
 
-    print(f"[开始] 下载 {REPO_ID}")
-    print("       首次下载约 1.2GB，请耐心等待...")
+    print(f"[开始] 下载 {REPO_ID}，请耐心等待...")
 
     # =================================================================
     # 3. 下载到 HuggingFace 标准缓存目录
