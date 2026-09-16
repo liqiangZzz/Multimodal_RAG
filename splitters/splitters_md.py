@@ -3,14 +3,16 @@ import hashlib
 import io
 import os
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 from PIL import Image
+from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 from embedding_demo.custom_embedding import CustomQwen3Embeddings
+from milvus_db.db_operator import do_save_to_milvus
 from utils.common_utils import get_sorted_md_files
 from utils.log_utils import log
 
@@ -256,18 +258,20 @@ class MarkdownDirSplitter:
 
 
 if __name__ == '__main__':
+    load_dotenv()  # 必须在 import embedding_config 之前调用
     md_dir = r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/output/第一章 Apache Flink 概述'
 
     splitter = MarkdownDirSplitter(images_output_dir=r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/images')
     docs = splitter.process_md_dir(md_dir, source_filename='第一章 Apache Flink 概述.pdf')
 
+    res: List[Dict] = do_save_to_milvus(docs)
     # 打印结果
-    for i, doc in enumerate(docs):
+    for i, doc in enumerate(res):
         print(f"\n文档 #{i + 1}:")
-        print(doc)
-        print(f"内容: {doc.page_content[:30]}...")
-        print(f"元数据: {doc.metadata}...")
-
-        print(f"一级标题: {doc.metadata.get('Header 1', '')}")
-        print(f"二级标题: {doc.metadata.get('Header 2', '')}")
-        print(f"三级标题: {doc.metadata.get('Header 3', '')}")
+        # print(doc)
+        # print(f"内容: {doc.page_content[:30]}...")
+        # print(f"元数据: {doc.metadata}...")
+        #
+        # print(f"一级标题: {doc.metadata.get('Header 1', '')}")
+        # print(f"二级标题: {doc.metadata.get('Header 2', '')}")
+        # print(f"三级标题: {doc.metadata.get('Header 3', '')}")
