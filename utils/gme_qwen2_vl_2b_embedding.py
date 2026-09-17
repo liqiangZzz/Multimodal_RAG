@@ -16,8 +16,9 @@
 """
 
 import os
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["MALLOC_STACK_LOGGING"] = "0"   # 尝试关闭 macOS malloc 日志
+os.environ["MALLOC_STACK_LOGGING"] = "0"  # 尝试关闭 macOS malloc 日志
 import base64
 import mimetypes
 from typing import Tuple, List, Dict, Optional, Union
@@ -25,7 +26,6 @@ from typing import Tuple, List, Dict, Optional, Union
 import torch
 from PIL import Image
 from transformers import AutoModel, AutoProcessor
-
 
 # ========= 配置区 =========
 
@@ -219,8 +219,8 @@ def normalize_image(img: str) -> Tuple[str, str]:
 # ========= 本地模型推理 =========
 
 def get_text_embedding(
-    text: str,
-    instruction: Optional[str] = None,
+        text: str,
+        instruction: Optional[str] = None,
 ) -> List[float]:
     """获取单条文本的嵌入向量。
 
@@ -243,7 +243,7 @@ def get_text_embedding(
 
 
 def get_image_embedding(
-    image: Union[str, Image.Image],
+        image: Union[str, Image.Image],
 ) -> List[float]:
     """获取单张图片的嵌入向量。
 
@@ -266,8 +266,8 @@ def get_image_embedding(
 
 
 def get_fused_embedding(
-    text: str,
-    image: Union[str, Image.Image],
+        text: str,
+        image: Union[str, Image.Image],
 ) -> List[float]:
     """获取「文本 + 图片」融合嵌入向量。
 
@@ -296,7 +296,7 @@ def get_fused_embedding(
 # ========= 核心处理逻辑 =========
 
 def call_local_model(
-    input_data: List[Dict],
+        input_data: List[Dict],
 ) -> Tuple[bool, List[float], Optional[int], Optional[float]]:
     """本地模型推理入口，替代原有的 call_dashscope_once()。
 
@@ -304,7 +304,7 @@ def call_local_model(
         input_data: 输入列表，支持三种形式：
             - [{"text": "..."}]                          纯文本
             - [{"image": "..."}]                         纯图片
-            - [{"text": "...", "image": "..."}]          图文融合
+            - [{"text": "..."}, {"image": "..."}]        图文融合
 
     Returns:
         (success, embedding, status_code, retry_after)
@@ -318,18 +318,24 @@ def call_local_model(
 
         # 解析输入
         item = input_data[0] if input_data else {}
-        has_text = "text" in item and item["text"]
-        has_image = "image" in item and item["image"]
 
-        if has_text and has_image:
-            # 图文融合
-            emb = get_fused_embedding(item["text"], item["image"])
-        elif has_text:
-            # 纯文本
-            emb = get_text_embedding(item["text"])
-        elif has_image:
-            # 纯图片
-            emb = get_image_embedding(item["image"])
+        #  遍历所有 dict，提取 text 和 image
+        text: Optional[str] = None
+        image: Optional[str] = None
+
+        for item in input_data:
+            if "text" in item and item["text"]:
+                text = item["text"]
+            if "image" in item and item["image"]:
+                image = item["image"]
+
+        #  根据提取到的内容分派到对应方法
+        if text and image:
+            emb = get_fused_embedding(text, image)
+        elif text:
+            emb = get_text_embedding(text)
+        elif image:
+            emb = get_image_embedding(image)
         else:
             print("[本地模型] 输入为空，无法推理")
             return False, [], None, None
@@ -347,9 +353,9 @@ def call_local_model(
 
 
 def process_item_with_guard(
-    item: Dict,
-    mode: str,
-    api_image: str = "",
+        item: Dict,
+        mode: str,
+        api_image: str = "",
 ) -> Dict:
     """处理单个数据项，生成嵌入向量。
 
@@ -383,7 +389,8 @@ def process_item_with_guard(
 
     elif mode == "text_image":
         if raw_text and api_image:
-            input_data = [{"text": raw_text, "image": api_image}]
+            # 图文融合：两个独立的 dict
+            input_data = [{"text": raw_text}, {"image": api_image}]
         elif raw_text:
             input_data = [{"text": raw_text}]
         elif api_image:
@@ -411,8 +418,8 @@ def process_item_with_guard(
 
 
 def build_work_items(
-    expanded_data: List[Dict],
-    combine_text_image: bool = True,
+        expanded_data: List[Dict],
+        combine_text_image: bool = True,
 ) -> List[Tuple[Dict, str, str]]:
     """构建工作项列表。
 
@@ -488,7 +495,7 @@ if __name__ == "__main__":
 
     if os.path.isfile(test_image):
         ok, emb, _, _ = call_local_model([
-            {"text": "一只在草地上奔跑的金毛犬", "image": test_image}
+            {"text": "一只在草地上奔跑的金毛犬"}, {"image": test_image}
         ])
         print(f"成功：{ok}，向量维度：{len(emb)}")
     else:
@@ -505,6 +512,7 @@ if __name__ == "__main__":
 
         if text_emb and img_emb:
             import numpy as np
+
             similarity = float(
                 np.dot(text_emb, img_emb) /
                 (np.linalg.norm(text_emb) * np.linalg.norm(img_emb))
