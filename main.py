@@ -1,8 +1,11 @@
 import os
+from typing import Dict, List
 
 import gradio as gr
 
 from dots_ocr.parser import do_parse
+from milvus_db.db_operator import do_save_to_milvus
+from splitters.splitters_md import MarkdownDirSplitter
 from utils.common_utils import get_filename, delete_directory_if_non_empty, get_sorted_md_files
 from utils.log_utils import log
 
@@ -118,6 +121,25 @@ class ProcessorAPP:
 
         return "没有找到该文件内容，请重新选择"
 
+    def save_to_knowledge(self):
+        """
+        存入知识库
+        """
+        if not self.md_dir:
+            return "请先解析PDF文件"
+
+        #  初始化分块器
+        self.splitter = MarkdownDirSplitter(images_output_dir=r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/images')
+        #  处理MD文件目录，生成文档列表
+        result = self.splitter.process_md_dir(self.md_dir, self.pdf_path)
+        #  存储文档到 Milvus
+        res: List[Dict] = do_save_to_milvus(result)
+        # 打印结果
+        for i, doc in enumerate(res):
+            print(f"\n文档 #{i + 1}:")
+            print(doc['text'], doc['image_path'])
+        return f"成功存入 {len(res)} 个文档到 Milvus"
+
     def create_interface(self):
         """创建 Gradio 界面"""
 
@@ -166,6 +188,13 @@ class ProcessorAPP:
                 fn=self.select_md_file,
                 inputs=file_dropdown,
                 outputs=[content]
+            )
+
+            # 点击存储事件：触发 save_to_knowledge
+            save_btn.click(
+                fn=self.save_to_knowledge,
+                inputs=[],
+                outputs=status
             )
         return app
 
