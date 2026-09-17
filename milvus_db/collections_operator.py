@@ -48,7 +48,7 @@ def create_db_collection():
         field_name="sparse",
         index_name="sparse_inverted_index",
         index_type="SPARSE_INVERTED_INDEX",  # 稀疏向量倒排索引
-        metric_type="BM25",  # 指标类型： BM25相似度
+        metric_type="BM25",  # 指标类型： BM25相似度 （用于文本检索）倒排索引
         params={
             "inverted_index_algo": "DAAT_MAXSCORE",
             "bm25_k1": 1.2,  # 1.2 ~ 2.0 (1.2) 词频 (TF) 的饱和度: 高频词的贡献越大，词频影响越线性，饱和度增长越慢(通俗：控制一个词出现多少次才算“多”)

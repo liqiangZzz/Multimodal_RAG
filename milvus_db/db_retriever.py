@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict
 
 from pymilvus import MilvusClient
+
 from milvus_db.collections_operator import MILVUS_COLLECTION_NAME
 from utils.env_utils import MILVUS_URI
 from utils.gme_qwen2_vl_2b_embedding import get_image_embedding, get_fused_embedding, get_text_embedding
@@ -513,7 +514,7 @@ if __name__ == '__main__':
     # ============================================================
     # 图片检索
     # ============================================================
-    test_image = "/Users/Python/project/project-learn/python-code/Multimodal_RAG/images/603b9b1f8257a08697b51a58e104b10c.png"
+    test_image = "/Users/Python/project/project-learn/python-code/Multimodal_RAG/data/flink_stateful_stream_checkpoint_architecture.png"
 
     # ===========以图搜图（只搜图片）=============
     _print_hits("以图搜图（only_image=True）",

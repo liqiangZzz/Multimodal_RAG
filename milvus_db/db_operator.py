@@ -4,9 +4,12 @@ import time
 from typing import List, Dict, Optional
 
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage
 from pymilvus import MilvusException
 
 from milvus_db.collections_operator import client, MILVUS_COLLECTION_NAME
+from models.init_chat_model_llm import glm_llm_flash
+from utils.common_utils import get_surrounding_text_content
 # 统一从 selector 导入，不再直接依赖具体实现
 from utils.embedding_selector import (
     build_work_items,
@@ -16,6 +19,7 @@ from utils.embedding_selector import (
     MAX_429_RETRIES,
     BASE_BACKOFF,
 )
+from utils.gme_qwen2_vl_2b_embedding import image_to_base64
 from utils.log_utils import log
 
 
@@ -154,24 +158,82 @@ def _calc_backoff(attempts: int, retry_after: Optional[float]) -> float:
     return min(exponential + jitter, 60.0)
 
 
+def generate_image_description(data_list):
+    """
+    处理文档数据，为每个图片字典生成多模态描述
+    Args:
+        data_list: 包含字典的列表
+
+    Returns:
+        包含完整结果的新列表
+    """
+
+    for index, item in enumerate(data_list):
+        if item.get("image_path"):  # 检查是否为图片字典
+            # 获取前后文本内容
+            prev_text, next_text = get_surrounding_text_content(data_list, index)
+
+            # 将图片转换成 base64
+            image_data = image_to_base64(item.get("image_path"))[0]
+
+            # 构建上下文提示词
+            if prev_text and next_text:
+                context_prompt = (
+                    f"前文内容: {prev_text}\n"
+                    f"后文内容: {next_text}\n\n"
+                    "请根据以上上下文和图片内容，生成对该图片的简洁描述，"
+                    "描述内容长度最好不超过300个汉字。\n"
+                    "注意：图片可能与前文、后文或两者都相关，请综合分析。"
+                )
+            elif prev_text:
+                context_prompt = (
+                    f"前文内容: {prev_text}\n\n"
+                    "请根据以上上下文和图片内容，生成对该图片的简洁描述，"
+                    "描述内容长度最好不超过300个汉字。"
+                )
+            elif next_text:
+                context_prompt = (
+                    f"后文内容: {next_text}\n\n"
+                    "请根据以上上下文和图片内容，生成对该图片的简洁描述，"
+                    "描述内容长度最好不超过300个汉字。"
+                )
+            else:
+                context_prompt = (
+                    "请描述这张图片的内容，生成对该图片的简洁描述，"
+                    "描述内容长度最好不超过300个汉字。"
+                )
+
+            # 构建多模态消息
+            message = HumanMessage(
+                content=[
+                    {"type": "text", "text": context_prompt},
+                    {"type": "image_url", "image_url": {"url": image_data}},
+                ]
+            )
+
+            # 调用模型生成描述
+            try:
+                response = glm_llm_flash.invoke([message])
+                item["text"] = response.content.strip()
+            except Exception as e:
+                log.exception(f"[图片描述] 第 {index} 张图片生成描述失败")
+                item["text"] = ""
+    return data_list
+
+
 # =============================================================================
 # 核心处理流程
 # =============================================================================
-def do_save_to_milvus(docs: List[Document]):
-    """
-    第一步：把Splitter之后的的数据（document对象列表），先转换为字典；
-    第二步：把字典中的文本 和图片 ，进行向量化，然后再存入字典。
-    第三步：最后写入向量数据库。
+def do_save_to_milvus(docs: List[Document]) -> List[Dict]:
+    """把 Document 列表向量化后写入 Milvus。
 
-    限流：
-        - 由 embedding 模块内部负责，本函数不感知。
-        - 云端 multimodal_embedding 内部的 call_dashscope_once() 已包含
-          limiter.acquire()。
-        - 本地 GME 模型无限流。
+    流程：
+        docs -> doc_to_dict -> generate_image_description -> build_work_items
+             -> process_item_with_guard -> 过滤空向量 -> write_to_milvus
 
     重试：
-        - local : 不重试，失败直接跳过。
-        - cloud : 仅对 _status == 429 重试，其他失败跳过。
+    - local : 不重试，失败直接跳过。
+    - cloud : 仅对 _status == 429 重试，其他失败跳过。
 
     Args:
         docs: Document 列表
@@ -179,24 +241,30 @@ def do_save_to_milvus(docs: List[Document]):
     Returns:
         带向量的字典列表（仅包含成功生成向量的数据）
     """
-
-    # 第一步：把Splitter之后的的数据（document对象列表），先转换为字典；
+    # ---- 第一步：Document -> Dict ----
+    # 把Splitter之后的的数据（document对象列表），先转换为字典
     data_dicts = doc_to_dict(docs)
     log.info(f"[Milvus] 转换后字典数量: {len(data_dicts)}")
 
-    # 第二步：把字典中的文本 和图片 ，进行向量化，然后再存入字典。
-    work_items = build_work_items(data_dicts)
+    # ---- 第二步：为图片生成描述（写入 description，不覆盖 text）----
+    expanded_data = generate_image_description(data_dicts)
+    log.info(f"[Milvus] 图片描述生成完成，共 {len(expanded_data)} 条")
+
+    # ---- 第三步：构建工作项 ----
+    work_items = build_work_items(expanded_data)
     log.info(f"[Milvus] 构建工作项数量: {len(work_items)}")
 
-    # 第三步：最后写入向量数据库（含 429 重试）
+    if not work_items:
+        log.warning("[Milvus] 没有可处理的工作项，直接退出")
+        return []
+
+    # ---- 第四步：向量化 ----
     embedded_data: List[Dict] = []
     total = len(work_items)
 
     for index, (item, mode, api_img) in enumerate(work_items, start=1):
 
-        # ---------------------------------------------------------------
-        # 本地模式：单次处理，不重试
-        # ---------------------------------------------------------------
+        # -------- 本地模式：单次处理 --------
         if not ENABLE_RETRY:
             try:
                 result = process_item_with_guard(
@@ -215,9 +283,7 @@ def do_save_to_milvus(docs: List[Document]):
                 log.info(f"[进度] 已处理 {index}/{total}")
             continue
 
-        # ---------------------------------------------------------------
-        # 云端模式：仅对 429 重试
-        # ---------------------------------------------------------------
+        # -------- 云端模式：429 重试 --------
         attempts = 0
         while True:
             try:
@@ -228,16 +294,13 @@ def do_save_to_milvus(docs: List[Document]):
                 log.exception(f"[异常] 处理第 {index} 项失败，跳过")
                 break
 
-            # 成功：有向量
             if result.get("dense"):
                 embedded_data.append(result)
                 break
 
-            # 失败：看状态码
             status = result.get("_status")
             retry_after = result.get("_retry_after")
 
-            # 不是 429，不重试
             if status != 429:
                 log.warning(
                     f"[跳过] idx={index}, mode={mode}, status={status}, "
@@ -246,7 +309,6 @@ def do_save_to_milvus(docs: List[Document]):
                 embedded_data.append(result)
                 break
 
-            # 是 429，但已达最大重试次数或未开启重试
             if not RETRY_ON_429 or attempts >= MAX_429_RETRIES:
                 log.warning(
                     f"[429重试] idx={index}, mode={mode}, "
@@ -255,7 +317,7 @@ def do_save_to_milvus(docs: List[Document]):
                 embedded_data.append(result)
                 break
 
-            # 可以重试
+            # 可以重试，等待 retry_after 秒后重试一次
             attempts += 1
             backoff = _calc_backoff(attempts, retry_after)
             log.info(
@@ -265,17 +327,16 @@ def do_save_to_milvus(docs: List[Document]):
             time.sleep(backoff)
             # while True 回到顶部重新处理
 
-        # 进度日志：在 for 内、while 外
         if index % 20 == 0 or index == total:
             log.info(f"[进度] 已处理 {index}/{total}")
 
-    # ---- 循环结束：写库前过滤空向量 ----
+    # ---- 第五步：过滤空向量 ----
     valid_data = [d for d in embedded_data if d.get("dense")]
     if len(valid_data) < len(embedded_data):
         log.warning(
             f"[Milvus] 过滤掉 {len(embedded_data) - len(valid_data)} 条无向量数据"
         )
 
-    # ---- 循环结束：统一写入 ----
+    # ---- 第六步：写入 Milvus ----
     write_to_milvus(valid_data)
     return valid_data
