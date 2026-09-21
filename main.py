@@ -129,7 +129,7 @@ class ProcessorAPP:
             return "请先解析PDF文件"
 
         #  初始化分块器
-        self.splitter = MarkdownDirSplitter(images_output_dir=r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/images')
+        self.splitter = MarkdownDirSplitter(images_output_dir=r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/output/images')
         #  处理MD文件目录，生成文档列表
         result = self.splitter.process_md_dir(self.md_dir, self.pdf_path)
         #  存储文档到 Milvus
