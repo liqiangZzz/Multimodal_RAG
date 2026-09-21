@@ -17,6 +17,7 @@ pymilvus Hit 对象访问方式：
     hit.entity       -> entity 字典
     hit["text"]      -> 等价于 hit.entity["text"]
 """
+import os.path
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict
@@ -25,7 +26,8 @@ from pymilvus import MilvusClient
 
 from milvus_db.collections_operator import MILVUS_COLLECTION_NAME
 from utils.env_utils import MILVUS_URI
-from utils.gme_qwen2_vl_2b_embedding import get_image_embedding, get_fused_embedding, get_text_embedding
+from utils.gme_qwen2_vl_2b_embedding import get_image_embedding, get_fused_embedding, get_text_embedding, \
+    image_to_base64, call_local_model
 
 
 # ============================================================
@@ -424,8 +426,47 @@ class MilvusRetriever:
         )
         return res[0]
 
+    def retrieve(self, query: str) -> List[Dict[str, Any]]:
+        """检索上下文
 
-# ============================================================
+        Args:
+            query: 查询文本
+
+        Returns:
+            检索结果列表，每条包含 id、score、entity
+        """
+
+        if os.path.isfile(query):
+            # 构建图像输入数据
+            input_data = [{"image": image_to_base64(query)[0]}]
+            # 调用API获取图像嵌入向量
+            ok, embedding, status, retry_after = call_local_model(input_data)
+        else:
+            # 构建文本输入数据
+            input_data = [{'text': query}]
+            # 调用API获取嵌入向量
+            ok, embedding, status, retry_after = call_local_model(input_data)
+
+        if ok:
+            # 纯图片不能用混合检索
+            if os.path.isfile(query):
+                results = self.dense_search(embedding, limit=self.config.top_k)
+            else:
+                results = self.hybrid_search_native(query, embedding, limit=self.config.top_k)
+
+        # 返回文档内容
+        docs = []
+        for hit in results:
+            docs.append(
+                {
+                    "text": hit.get("text"), "category": hit.get("category"),
+                    "image_path": hit.get("image_path"), "filename": hit.get("filename"),
+                }
+            )
+
+        return docs
+
+
 # 测试入口
 # ============================================================
 
