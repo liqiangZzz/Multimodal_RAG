@@ -6,6 +6,7 @@
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
+from openai import OpenAI, AsyncOpenAI
 
 from utils.env_utils import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, GLM_API_KEY, GLM_BASE_URL
 
@@ -38,4 +39,15 @@ glm_llm_flash: BaseChatModel = init_chat_model(
     model_provider="openai",
     api_key=GLM_API_KEY,
     base_url=GLM_BASE_URL,
+)
+
+
+glm_llm_flash_client = OpenAI(
+    api_key=GLM_API_KEY,
+    base_url=GLM_BASE_URL   # 智谱/GLM 的兼容地址
+)
+
+async_glm_llm_flash_client = AsyncOpenAI(
+    api_key=GLM_API_KEY,
+    base_url=GLM_BASE_URL   # 智谱/GLM 的兼容地址
 )
