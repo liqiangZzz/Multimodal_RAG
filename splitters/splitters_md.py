@@ -261,7 +261,7 @@ if __name__ == '__main__':
     load_dotenv()  # 必须在 import embedding_config 之前调用
     md_dir = r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/output/第一章 Apache Flink 概述'
 
-    splitter = MarkdownDirSplitter(images_output_dir=r'/output/images')
+    splitter = MarkdownDirSplitter(images_output_dir=r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/output/images')
     docs = splitter.process_md_dir(md_dir, source_filename='第一章 Apache Flink 概述.pdf')
 
     res: List[Dict] = do_save_to_milvus(docs)
