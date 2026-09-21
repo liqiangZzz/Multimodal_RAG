@@ -9,3 +9,5 @@ PyMuPDF
 sentence_transformers
 frontend
 langchain-text-splitters
+dashscope
+ragas
