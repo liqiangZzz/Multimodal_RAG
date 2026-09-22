@@ -11,7 +11,7 @@ from langchain_core.documents import Document
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
-from embedding_demo.custom_embedding import CustomQwen3Embeddings
+from embedding_demo.custom_embedding import ModernQwen2Embeddings
 from milvus_db.db_operator import do_save_to_milvus
 from utils.common_utils import get_sorted_md_files
 from utils.log_utils import log
@@ -44,8 +44,11 @@ class MarkdownDirSplitter:
 
         self.text_splitter = MarkdownHeaderTextSplitter(self.headers_to_split_on)  # 文本分割器
 
-        # 2. 语义分割器：当文本块太长时，根据语义（Embedding相似度）进行智能切分，避免硬切
-        self.embedding = CustomQwen3Embeddings("Qwen/Qwen3-Embedding-0.6B")  # 语义嵌入
+        # 2. 语义分割器：当文本块太长时，根据语义（Embedding 相似度）进行智能切分，避免硬切
+        # 全链路统一使用多模态嵌入 gme-Qwen2-VL-2B-Instruct（1536 维，与 Milvus dense 字段同源），
+        # 语义切分与文档向量化同模型，切分相似度判断与检索侧向量空间保持一致。
+        # 运行环境：统一的 conda 环境 Multimodal_RAG（transformers 4.51.3 锁版），无需切换环境。
+        self.embedding = ModernQwen2Embeddings("Alibaba-NLP/gme-Qwen2-VL-2B-Instruct")  # 多模态嵌入
         self.semantic_splitter = SemanticChunker(
             self.embedding, breakpoint_threshold_type="percentile"
         )
@@ -258,7 +261,9 @@ class MarkdownDirSplitter:
 
 
 if __name__ == '__main__':
-    load_dotenv()  # 必须在 import embedding_config 之前调用
+    # 说明：.env 在 import 阶段已由 utils/env_utils.py 的 load_dotenv(override=False) 加载，
+    # 这里再调一次仅作兜底；override=False 表示不会覆盖已有的系统环境变量。
+    load_dotenv()
     md_dir = r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/output/第一章 Apache Flink 概述'
 
     splitter = MarkdownDirSplitter(images_output_dir=r'/Users/Python/project/project-learn/python-code/Multimodal_RAG/output/images')

@@ -6,32 +6,17 @@ from sentence_transformers import SentenceTransformer
 
 
 # ============================================================
-# 1. Qwen3 文本嵌入（LangChain 接口）
+# gme-Qwen2-VL 多模态嵌入（LangChain + Ragas 双接口，自包含）
 # ============================================================
-class CustomQwen3Embeddings(Embeddings):
-    """自定义一个 qwen3 文本嵌入，适配 LangChain Embeddings 接口。"""
+class ModernQwen2Embeddings(Embeddings, BaseRagasEmbedding):
+    """gme-Qwen2-VL-2B-Instruct 嵌入，同时适配两套接口：
 
-    def __init__(self, model_name: str = "Qwen/Qwen3-Embedding-0.6B"):
-        self.qwen3_embedding = SentenceTransformer(model_name, local_files_only=True)
-
-    def embed_query(self, text: str) -> List[float]:
-        return self.embed_documents([text])[0]
-
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return self.qwen3_embedding.encode(texts)
-
-
-# ============================================================
-# 2. gme-Qwen2-VL 多模态嵌入（直接实现 Ragas 接口，自包含）
-# ============================================================
-class ModernQwen2Embeddings(BaseRagasEmbedding):
-    """gme-Qwen2-VL-2B-Instruct 嵌入，实现 Ragas BaseRagasEmbedding 接口。
+    - LangChain `Embeddings` 接口（embed_query / embed_documents）：
+      供 SemanticChunker 等组件直接使用；
+    - Ragas `BaseRagasEmbedding` 接口（embed_text / embed_texts 及异步版本）：
+      供 RAG 评估链路使用。
 
     设计要点：
-      - 对外提供同步 / 异步的 embed_text / embed_texts 方法；
-      - 内部 _encode 统一处理 dict 输入和 tensor→list 的转换；
-
-    注意：
       - 模型带自定义模块，必须传 trust_remote_code=True；
       - 输入必须是 dict 形式（{"text": ...} 或 {"image": ...}）；
       - 输出可能是 torch.Tensor / numpy.ndarray，统一转 list。
@@ -73,6 +58,15 @@ class ModernQwen2Embeddings(BaseRagasEmbedding):
     def _to_text_inputs(self, texts: List[str]) -> List[dict]:
         """文本 → gme 要求的 dict 输入格式。"""
         return [{"text": t} for t in texts]
+
+    # ---------------- LangChain 同步接口 ----------------
+    def embed_query(self, text: str) -> List[float]:
+        """嵌入单条查询文本（LangChain 接口）。"""
+        return self.embed_documents([text])[0]
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """嵌入一批文本（LangChain 接口）。"""
+        return self._encode(self._to_text_inputs(texts))
 
     # ---------------- Ragas 同步接口 ----------------
     def embed_text(self, text: str, **kwargs: Any) -> List[float]:
