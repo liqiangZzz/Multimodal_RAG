@@ -52,7 +52,12 @@ multimodal_search / hybrid_search（RRF 融合）
 │   └── log_utils.py                    #   loguru 日志
 ├── embedding_demo/
 │   ├── download_model_embedding.py     #   下载本地多模态模型
-│   └── custom_embedding.py             #   LangChain Embeddings 集成示例
+│   └── custom_embedding.py             #   LangChain / Ragas 双接口嵌入集成示例
+├── evaluate/                           # RAG 效果评估（Ragas 指标）
+│   ├── evaluate_single_turn.py         #   单轮评估：上下文相关性 / 答案相关性 / 精确度
+│   └── evaluate_multi_turn.py          #   多轮评估：目标达成度 / 主题一致性
+├── models/
+│   └── init_chat_model_llm.py          #   LLM 客户端统一初始化（GLM / DeepSeek / ZhipuAI）
 ├── data/                               # 输入数据（示例 PDF、以图搜图测试图片）
 ├── output/                             # OCR 解析结果（每页 md / json / jpg）
 ├── images/                             # 分割器提取出的配图（不入库）
@@ -101,6 +106,22 @@ multimodal_search / hybrid_search（RRF 融合）
 | `hybrid_search` | 客户端 RRF 融合（两路都命中可加权） |
 | `hybrid_search_native` | 服务端原生 RRF 融合（Milvus 2.4+） |
 
+### 5. RAG 效果评估（evaluate）
+基于 Ragas 对 RAG 链路做量化评估，入口在 `evaluate/`：
+
+| 脚本 | 指标 | 说明 |
+|---|---|---|
+| `evaluate_single_turn.py` | 上下文相关性 / 答案相关性 / 上下文精确度 | 上下文精确度支持有/无参考答案两种模式 |
+| `evaluate_multi_turn.py` | 目标达成度 / 主题一致性（f1 / precision / recall） | 目标达成度为 `None` 时标记「评估失败（输出截断）」 |
+
+- **评估 LLM**：GLM（`glm-5.3-flash`，异步 OpenAI 兼容客户端，`max_tokens=4096`）。
+- **评估嵌入**：`ModernQwen2Embeddings`（`Alibaba-NLP/gme-Qwen2-VL-2B-Instruct`，直接实现 Ragas `BaseRagasEmbedding` 接口，见 `embedding_demo/custom_embedding.py`）。
+
+### 6. 多模态嵌入集成示例（embedding_demo）
+`custom_embedding.py` 提供两个可直接复用的嵌入类：
+- `CustomQwen3Embeddings`：Qwen3 文本嵌入，适配 **LangChain** `Embeddings` 接口。
+- `ModernQwen2Embeddings`：gme-Qwen2-VL 多模态嵌入，适配 **Ragas** `BaseRagasEmbedding` 接口（含 `embed_text` / `embed_texts` 及对应异步方法）。
+
 ## 环境准备
 
 ### 1. 创建 conda 环境
@@ -135,6 +156,7 @@ cp .env.example .env
 | `MILVUS_URI` | Milvus 地址，默认 `http://127.0.0.1:19530` |
 | `MILVUS_COLLECTION_NAME` | 集合名，默认 `t_doc_collection` |
 | `QWEN3_VL_EMBEDDING_PATH` | 本地模型快照路径（可选，默认读 HuggingFace 缓存） |
+| `ZHIPU_API_KEY` | 智谱 AI 密钥（用于 `init_chat_model_llm.py` 中的 ZhipuAI 客户端） |
 
 > `.env` 已被 `.gitignore` 排除，**严禁提交**，只提交 `.env.example` 模板。
 
@@ -179,6 +201,13 @@ python milvus_db/db_retriever.py
 ```
 
 内置演示：文本语义检索、BM25 关键词检索、RRF 混合检索、以图搜图、图文融合检索。
+
+### RAG 效果评估
+
+```bash
+python evaluate/evaluate_single_turn.py   # 单轮评估
+python evaluate/evaluate_multi_turn.py    # 多轮评估
+```
 
 ## 目录数据约定
 
