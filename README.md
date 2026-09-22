@@ -62,7 +62,8 @@ multimodal_search / hybrid_search（RRF 融合）
 ├── output/                             # OCR 解析结果（每页 md / json / jpg）
 ├── images/                             # 分割器提取出的配图（不入库）
 ├── .env.example                        # 环境变量模板（复制为 .env 使用）
-├── requirements.txt                    # 依赖
+├── requirements_multimodal_rag.txt     # 主环境依赖快照（125 个包，锁版本）
+├── requirements_gme_qwen_local.txt     # 本地 GME 环境依赖快照（145 个包，锁版本）
 └── venv.txt                            # conda 环境创建指引
 ```
 
@@ -84,7 +85,7 @@ multimodal_search / hybrid_search（RRF 融合）
 
 | 后端 | 模型 | 向量维度 | 说明 |
 |---|---|---|---|
-| `local` | `Alibaba-NLP/gme-Qwen2-VL-2B-Instruct` | 1536 | 本地推理，需独立 conda 环境，无限流 |
+| `local` | `Alibaba-NLP/gme-Qwen2-VL-2B-Instruct` | 1536 | 本地推理，须在 `gme_qwen_local` 环境（transformers 4.51.3 锁版），无限流 |
 | `cloud` | DashScope `multimodal-embedding-v1` | 由服务端决定 | 内置 RPM 限流与 429 指数退避重试 |
 
 统一支持三种输入模式：纯文本（`text`）、纯图片（`image`）、图文融合（`text_image`）。
@@ -116,6 +117,7 @@ multimodal_search / hybrid_search（RRF 融合）
 
 - **评估 LLM**：GLM（`glm-5.3-flash`，异步 OpenAI 兼容客户端，`max_tokens=4096`）。
 - **评估嵌入**：`ModernQwen2Embeddings`（`Alibaba-NLP/gme-Qwen2-VL-2B-Instruct`，直接实现 Ragas `BaseRagasEmbedding` 接口，见 `embedding_demo/custom_embedding.py`）。
+- **运行环境**：评估依赖 `ragas` 包并使用本地 gme 嵌入，**只能在 `gme_qwen_local` 环境运行**。
 
 ### 6. 多模态嵌入集成示例（embedding_demo）
 `custom_embedding.py` 提供两个可直接复用的嵌入类：
@@ -194,23 +196,45 @@ python embedding_demo/download_model_embedding.py   # 需在 gme_qwen_local 环�
 
 ## 运行与使用
 
+> ⚠️ 运行前先确认激活的环境（`conda env list` 查看当前环境）。各步骤所需的 conda 环境已在下方速查表与每条命令中标注。
+
+### 运行环境速查
+
+| 入口 | 作用 | 运行环境 | 说明 |
+|---|---|---|---|
+| `milvus_db/collections_operator.py` | 初始化向量集合 | `Multimodal_RAG` | 仅建表，两个环境都兼容 |
+| `splitters/splitters_md.py` | 分割 → 向量化 → 入库 | 取决 `EMBEDDING_BACKEND` | `local`→`gme_qwen_local`；`cloud`→`Multimodal_RAG` |
+| `main.py` | Gradio 交互界面 | `Multimodal_RAG` | OCR 解析 + 查看每页 MD |
+| `milvus_db/db_retriever.py` | 检索测试（含以图搜图） | `gme_qwen_local` | 内部直接调用本地 gme 嵌入 |
+| `evaluate/evaluate_*.py` | RAG 效果评估 | `gme_qwen_local` | 依赖 `ragas` 包（仅该环境安装） |
+| `embedding_demo/download_model_embedding.py` | 下载本地 GME 模型 | `gme_qwen_local` | — |
+
 ### 初始化向量集合
 
 ```bash
+conda activate Multimodal_RAG        # 或 gme_qwen_local，两个环境均可
 python milvus_db/collections_operator.py
 ```
 
 ### 构建知识库（从 Markdown → 向量库）
 
 ```bash
-python splitters/splitters_md.py
+# 方式一：文档向量走本地 GME（推荐，无 API 限流）→ 在 gme_qwen_local 环境
+conda activate gme_qwen_local
+EMBEDDING_BACKEND=local python splitters/splitters_md.py
+
+# 方式二：文档向量走云端 DashScope → 在主环境即可
+conda activate Multimodal_RAG
+EMBEDDING_BACKEND=cloud python splitters/splitters_md.py
 ```
 
 > 入口中指定了 `md_dir` 与 `images_output_dir`，执行后完成分割、向量化并写入 Milvus。
+> 注意：`EMBEDDING_BACKEND=local` 时**必须在 `gme_qwen_local` 环境**运行，否则本地 gme 嵌入无法加载（Milvus 集合的 dense 维度即来自该模型 1536 维）。
 
 ### 启动 Gradio 交互界面
 
 ```bash
+conda activate Multimodal_RAG
 python main.py
 ```
 
@@ -219,17 +243,23 @@ python main.py
 ### 检索测试
 
 ```bash
+conda activate gme_qwen_local
 python milvus_db/db_retriever.py
 ```
 
 内置演示：文本语义检索、BM25 关键词检索、RRF 混合检索、以图搜图、图文融合检索。
 
+> 内部通过 `utils.gme_qwen2_vl_2b_embedding` 直接调用本地 gme 嵌入（以图搜图 / 图文融合检索），**必须在 `gme_qwen_local` 环境运行**。
+
 ### RAG 效果评估
 
 ```bash
+conda activate gme_qwen_local
 python evaluate/evaluate_single_turn.py   # 单轮评估
 python evaluate/evaluate_multi_turn.py    # 多轮评估
 ```
+
+> 评估依赖 `ragas` 包，且评估嵌入为本地 gme 模型，**只能在 `gme_qwen_local` 环境运行**。
 
 ## 目录数据约定
 
