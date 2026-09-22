@@ -11,14 +11,14 @@
 from typing import List, Dict, Literal, get_args
 
 from ragas.llms import llm_factory
+from ragas.messages import HumanMessage, AIMessage
 from ragas.metrics.collections import (
     AgentGoalAccuracyWithReference,
     AgentGoalAccuracyWithoutReference,
     TopicAdherence,
 )
-from ragas.messages import HumanMessage, AIMessage
 
-from embedding_demo.custom_embedding import CustomQwen3Embeddings
+from embedding_demo.custom_embedding import ModernQwen2Embeddings
 from milvus_db.collections_operator import client
 from milvus_db.db_retriever import MilvusRetriever
 from models.init_chat_model_llm import glm_llm_flash, async_glm_llm_flash_client
@@ -192,7 +192,10 @@ class MultiTurnRAGEvaluator:
             conversation, reference=reference
         )
         # 目标达成度指标值
-        results["agent_goal_accuracy"] = goal_result["score"]
+        if goal_result["score"] is not None:
+            results["agent_goal_accuracy"] = goal_result["score"]
+        else:
+            results["agent_goal_accuracy"] = "评估失败（输出截断）"
 
         # 主题一致性（分别以 f1、precision、recall 三种模式评估）
         if reference_topics:
@@ -244,8 +247,8 @@ def build_multi_turn_rag_conversation(
 async def main():
     # ---------- 初始化评估 LLM ----------
     # 注意：async_glm_llm_flash_client 必须是 AsyncOpenAI 兼容的异步客户端
-    evaluator_llm = llm_factory("glm-5.3-flash", client=async_glm_llm_flash_client)
-    evaluator_embedding = CustomQwen3Embeddings("Qwen/Qwen3-Embedding-0.6B")
+    evaluator_llm = llm_factory("glm-5.3-flash", client=async_glm_llm_flash_client,max_tokens=4096)
+    evaluator_embedding = ModernQwen2Embeddings("Alibaba-NLP/gme-Qwen2-VL-2B-Instruct")
 
     multi_turn_evaluator = MultiTurnRAGEvaluator(
         evaluator_llm, evaluator_embedding

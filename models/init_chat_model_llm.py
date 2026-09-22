@@ -3,12 +3,12 @@
 普通示例统一导入本模块的 ``deepseek_llm``。只有专门演示模型初始化方式或
 需要特殊模型配置时，才在对应示例中单独调用 ``init_chat_model``。
 """
-
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from openai import OpenAI, AsyncOpenAI
+from zhipuai import ZhipuAI
 
-from utils.env_utils import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, GLM_API_KEY, GLM_BASE_URL
+from utils.env_utils import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, GLM_API_KEY, GLM_BASE_URL, ZHIPU_API_KEY
 
 # =====================================================================
 # 1. 创建共享模型 —— 供项目内普通示例统一复用
@@ -41,7 +41,6 @@ glm_llm_flash: BaseChatModel = init_chat_model(
     base_url=GLM_BASE_URL,
 )
 
-
 glm_llm_flash_client = OpenAI(
     api_key=GLM_API_KEY,
     base_url=GLM_BASE_URL   # 智谱/GLM 的兼容地址
@@ -51,3 +50,5 @@ async_glm_llm_flash_client = AsyncOpenAI(
     api_key=GLM_API_KEY,
     base_url=GLM_BASE_URL   # 智谱/GLM 的兼容地址
 )
+
+zhipuai_client = ZhipuAI(api_key=ZHIPU_API_KEY)

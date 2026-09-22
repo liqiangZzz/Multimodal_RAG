@@ -11,3 +11,4 @@ frontend
 langchain-text-splitters
 dashscope
 ragas
+zhipuai
