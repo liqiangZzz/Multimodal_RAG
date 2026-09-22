@@ -126,20 +126,42 @@ multimodal_search / hybrid_search（RRF 融合）
 
 ### 1. 创建 conda 环境
 
-推荐两个独立环境（本地 GME 模型与主环境存在依赖冲突，见 `venv.txt`）：
+推荐两个独立环境（本地 GME 模型与主环境存在依赖冲突，原因见下文「两个依赖文件说明」）：
 
 ```bash
 # 主环境
 conda create -n Multimodal_RAG python=3.11 -y
 conda activate Multimodal_RAG
-pip install -r requirements.txt
+pip install -r requirements_multimodal_rag.txt
 
 # 本地 GME 模型专用环境
 conda create -n gme_qwen_local python=3.11 -y
 conda activate gme_qwen_local
-pip install -r requirements.txt
-pip install transformers==4.51.3 huggingface-hub==0.36.2 tokenizers==0.21.4
+pip install -r requirements_gme_qwen_local.txt
+# 注：该文件已锁定 transformers==4.51.3 / huggingface-hub==0.36.2 / tokenizers==0.21.4
 ```
+
+> 更简明的步骤清单见 `venv.txt`。
+
+#### 两个依赖文件说明（requirements_*.txt）
+
+| 文件 | 对应环境 | 包数 | 用途 |
+|---|---|---|---|
+| `requirements_multimodal_rag.txt` | `Multimodal_RAG`（主环境） | 125 | Gradio 界面 / 检索 / OCR 主链路，现代 HF 依赖栈 |
+| `requirements_gme_qwen_local.txt` | `gme_qwen_local`（本地 GME） | 145 | gme-Qwen2-VL 本地推理 + Ragas 评估，锁定兼容依赖栈 |
+
+两个环境是**刻意分离**的：`gme_qwen_local` 在覆盖主环境全部 125 个包之外，还多出 Ragas 评估链路所需的 `ragas / datasets / accelerate / scikit-network` 等 20 个包；但两环境共有包中有 17 个**版本不同**，核心差异集中在 HF / Transformers 栈：
+
+| 包 | `Multimodal_RAG`（主） | `gme_qwen_local` | 说明 |
+|---|---|---|---|
+| transformers | 5.17.0 | 4.51.3 | gme-VL 模型必须锁定旧版才能加载推理 |
+| tokenizers | 0.23.2 | 0.21.4 | 随 transformers 降级 |
+| huggingface_hub | 1.31.0 | 0.36.2 | 随 transformers 降级 |
+| sentence-transformers | 6.0.1 | 5.3.0 | 本地多模态嵌入所用版本 |
+| openai | 3.13.0 | 1.109.1 | 主环境新版 SDK / gme 环境旧版 |
+| gradio | 6.26.0 | 6.27.0 | 轻微差异 |
+
+> ⚠️ **混装即冲突**：`transformers 5.17` 会导致 `gme-Qwen2-VL-2B-Instruct` 本地推理失败；反之用 gme 清单装主环境会引入旧版 `openai` 等。重建环境时请**严格按各自文件安装**，并保持 `python=3.11`。
 
 ### 2. 配置环境变量
 

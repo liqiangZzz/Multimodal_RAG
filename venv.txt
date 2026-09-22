@@ -2,7 +2,7 @@ conda create -n Multimodal_RAG python=3.11 -y
 
 conda activate Multimodal_RAG
 
-pip install -r  requirements.txt
+pip install -r  requirements_multimodal_rag.txt
 
 
 # 调用 Alibaba-NLP/gme-Qwen2-VL-2B-Instruct 模型需要重新创建一个环境，因为 GME 模型的依赖和主环境的依赖冲突了
@@ -13,7 +13,7 @@ conda create -n gme_qwen_local python=3.11 -y
 conda activate gme_qwen_local
 
 # 兼容主环境的依赖
-pip install -r  requirements.txt
+pip install -r  requirements_gme_qwen_local.txt
 
 # transformers 4.51.3（连带降级 huggingface-hub 和 tokenizers）
 pip install transformers==4.51.3 huggingface-hub==0.36.2 tokenizers==0.21.4
