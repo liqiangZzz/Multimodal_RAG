@@ -24,10 +24,10 @@ from typing import List, Optional, Any, Dict
 
 from pymilvus import MilvusClient
 
+from embedding.gme_qwen2_vl_2b_embedding import get_image_embedding, get_fused_embedding, get_text_embedding, \
+    image_to_base64, call_local_model
 from milvus_db.collections_operator import MILVUS_COLLECTION_NAME
 from utils.env_utils import MILVUS_URI
-from utils.gme_qwen2_vl_2b_embedding import get_image_embedding, get_fused_embedding, get_text_embedding, \
-    image_to_base64, call_local_model
 
 
 # ============================================================

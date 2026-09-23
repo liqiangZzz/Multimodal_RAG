@@ -7,11 +7,8 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
 from pymilvus import MilvusException
 
-from milvus_db.collections_operator import client, MILVUS_COLLECTION_NAME
-from models.init_chat_model_llm import glm_llm_flash
-from utils.common_utils import get_surrounding_text_content
 # 统一从 selector 导入，不再直接依赖具体实现
-from utils.embedding_selector import (
+from embedding.common.embedding_selector import (
     build_work_items,
     process_item_with_guard,
     ENABLE_RETRY,
@@ -19,7 +16,10 @@ from utils.embedding_selector import (
     MAX_429_RETRIES,
     BASE_BACKOFF,
 )
-from utils.gme_qwen2_vl_2b_embedding import image_to_base64
+from embedding.gme_qwen2_vl_2b_embedding import image_to_base64
+from milvus_db.collections_operator import client, MILVUS_COLLECTION_NAME
+from models.init_chat_model_llm import glm_llm_flash
+from utils.common_utils import get_surrounding_text_content
 from utils.log_utils import log
 
 
