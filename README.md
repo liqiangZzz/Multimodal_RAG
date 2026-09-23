@@ -11,7 +11,7 @@
 | 链路 | 入口 | 向量集合 | 用途 |
 |---|---|---|---|
 | 文档知识库 | `main.py` / `splitters/splitters_md.py` | `t_doc_collection` | PDF → OCR → 分割 → 向量化 → 入库，面向文档检索 |
-| 多轮对话 RAG 工作流 | `python -m graph.workflow[_gradio]` | `t_context_collection` | 基于该用户的历史问答作答，**本地查不到自动联网**并写回 |
+| 多轮对话 RAG 工作流 | `python -m graph.workflow[_gradio]` | `t_context_collection` | 基于该用户的历史问答作答，评估不合格转人工审批，**拒绝后联网兜底**并写回 |
 
 ## 整体流程
 
@@ -43,14 +43,17 @@ multimodal_search / hybrid_search（RRF 融合）
   ▼
 first_chatbot（LLM 调用 search_context 工具）
   │  search_context：文本 → gme 嵌入 → 按 username 过滤 → hybrid_search（RRF）
-  ▼
-上下文相关性评分 ≥ 0.5 ？
-  ├── 是 → second_chatbot 基于历史对话上下文作答
-  └── 否 → web_search_node 联网检索 → fourth_chatbot 基于搜索结果作答
-  ▼
-evaluate_node（答案相关性）
-  ├── ≥ 0.7 → END，答案自动写回 t_context_collection
-  └── < 0.7 → 人工审批：approve → END ／ rejected → 联网重新作答
+  │                    → 上下文相关性评分 ≥ 0.5 才返回内容
+  ├── 命中 → second_chatbot 基于历史对话上下文作答 → END（写回上下文库）
+  └── 未命中 → retriever_node 放宽条件再检索 → third_chatbot 作答
+                    ▼
+                evaluate_node（答案相关性）
+                  ├── ≥ 0.7 → END，答案自动写回 t_context_collection
+                  └── < 0.7 → human_approval（中断）
+                                ├── approve → END（写回）
+                                └── rejected → fourth_chatbot 调用 my_search 联网
+                                                 ▲            │
+                                                 └─ web_search_node ┘（工具节点执行搜索）
 
 （仅输入图片时走另一条支线：process_input → retriever_node → third_chatbot → …）
 ```
@@ -106,6 +109,7 @@ evaluate_node（答案相关性）
 │   ├── evaluate_single_turn.py         #   单轮评估：上下文相关性 / 答案相关性 / 精确度
 │   └── evaluate_multi_turn.py          #   多轮评估：目标达成度 / 主题一致性
 ├── graph/                              # ⑥ 多轮对话 RAG 工作流（LangGraph，独立于文档链路）
+│   ├── graph_builder.py                #   **唯一的图定义**：节点 / 路由 / 图构建 / 写库（两个入口共用）
 │   ├── workflow.py                     #   命令行入口：python -m graph.workflow
 │   ├── workflow_gradio.py              #   Gradio 界面入口：python -m graph.workflow_gradio
 │   ├── custom_state.py                 #   图状态：输入类型 / 检索结果 / 评估分数 / 用户名
@@ -194,7 +198,7 @@ evaluate_node（答案相关性）
 
 **状态**（`custom_state.py`，继承 LangGraph 的 `MessagesState`）：
 `input_type`（`has_text` / `only_image`）、`context_retrieved`、`image_retrieved`、
-`web_search_result`、`evaluate_score`、`human_answer`、`username`、`input_text` / `input_image`。
+`evaluate_score`、`human_answer`、`username`、`input_text` / `input_image`。
 
 **节点**
 
@@ -203,28 +207,36 @@ evaluate_node（答案相关性）
 | `process_input` | 判别输入类型（纯文本 / 纯图片 / 图文），写入状态 |
 | `first_chatbot` | 绑定 `search_context` 工具的 LLM，决定检索 |
 | `search_context` | 自定义工具节点：把状态里的 `username` 显式传给工具并并行执行 |
-| `second_chatbot` | 基于检索到的历史对话上下文作答 |
-| `third_chatbot` | 纯图片支线：基于 `retriever_node` 的结果作答 |
-| `web_search_node` | **确定性**联网检索节点（直接调 `my_search`，不依赖模型自主决定调工具） |
-| `fourth_chatbot` | 基于网络搜索结果作答，并给消息打上 `answer_source` 标记 |
+| `second_chatbot` | 命中历史上下文时作答（图的终态节点） |
+| `retriever_node` | 未命中时放宽条件再检索一遍，结果写入 `state['context_retrieved']` |
+| `third_chatbot` | 基于 `retriever_node` 的结果作答 |
 | `evaluate_node` | 答案相关性评估（AnswerRelevancy） |
 | `human_approval` | 静态中断点，由人工输入 `approve` / `rejected` |
+| `fourth_chatbot` | 绑定 `my_search` 工具的 LLM，审批被拒后联网重新作答 |
+| `web_search_node` | `ToolNode` 工具节点，执行 `my_search` 智谱联网检索 |
 
 **要点**
 
-- **本地查不到就联网**：`search_context` 未命中（或上下文相关性 < 0.5）时**不进入**
-  `retriever_node`，而是直接联网检索；`retriever_node` 只服务纯图片支线。
-  原因是它不带任何相关性门槛，会把无价值的命中（如上一轮自己写回的兜底话术）当作"上下文"
-  喂给模型，导致回答只能复述兜底话术、被评估判 0 分、进而卡在人工审批。
-- **两道分数门槛**：上下文相关性 **0.5**（`tools.py`，判定"本地内容够不够格"）、
-  答案相关性 **0.7**（`all_router.py`，判定"要不要转人工审批"）。
-- **写回带来源标记**：写库时 `message_type` 取自消息对象上的 `answer_source` ——
-  联网所得记 `WebSearch`，历史上下文所得记 `AIMessage`。标记必须挂在**消息**上而非 state 字段：
-  state 在同一 thread 内跨轮累积，用字段会把后续轮次一起误标。
-- **写库质量闸门**：`save_context.is_worth_saving()` 会拒绝写入兜底话术（命中"没有检索到"等特征）
+- **单一图定义**：节点、路由与图构建集中在 `graph_builder.py`，`workflow.py` 与
+  `workflow_gradio.py` 只保留各自的输入 / 输出外壳，两者共用同一份图，不可能再出现流程差异。
+- **两道分数门槛**：上下文相关性 **0.5**（`tools.py`，判定「本地内容够不够格」）、
+  答案相关性 **0.7**（`all_router.py`，判定「要不要转人工审批」）。
+- **联网兜底挂在 rejected 分支**：未命中先回 `retriever_node` 放宽条件再检索，
+  答不好再走人工审批；用户输入 `rejected` 后才由 `fourth_chatbot` 调用 `my_search` 联网重新作答。
+  `fourth_chatbot ↔ web_search_node` 是回路，因此 `fourth_chatbot` 把完整历史一起送给模型，
+  否则模型看不到搜索结果、会反复调工具直到撞上递归上限。
+- **写回带来源标记**：若本轮轨迹里出现过 `my_search` 的 `ToolMessage`，`message_type` 记
+  `WebSearch`，否则记 `AIMessage`。依据**轨迹**判断而非额外的 state 字段：state 在同一 thread
+  内跨轮累积，用字段会把后续轮次一起误标。
+- **写库质量闸门**：`save_context.is_worth_saving()` 会拒绝写入兜底话术（命中「没有检索到」等特征）
   或答案相关性低于 `0.3` 的回答。原因：上下文库是「上一轮写、下一轮读」，而兜底话术
   **包含用户的原始提问词**，一旦写回，下一轮同类提问就会命中它 → 上下文评分 0 →
-  又生成同样话术 → 又写回去，形成每轮加毒且永不自愈的"冷启动自锁"。
+  又生成同样话术 → 又写回去，形成每轮加毒且永不自愈的「冷启动自锁」。
+  闸门放在写入器内部，两个入口同时受保护。
+- **两条检索路径的差异（已知，未消除）**：`tools.search_context` 带 0.5 分门槛，
+  `retriever_node` 不带门槛。未命中时走 `retriever_node` 是本流程的设计选择，
+  代价是无价值的命中（如上一轮写回的兜底话术）也会被当作上下文喂给 `third_chatbot`；
+  写库质量闸门与人工审批是这条路径的两道兜底。
 
 **运行**（必须以**模块方式**从项目根执行；直接 `python graph/workflow.py` 会因项目根不在
 `sys.path` 而报 `No module named 'graph'`）
@@ -314,9 +326,11 @@ python -m graph.workflow_gradio                   # ⑧ 多轮对话问答（Gra
 - **③** 界面流程：上传 PDF → 点击「解析PDF」→ 下拉框查看每页 MD → 点击「存入知识库」，
   与 **②** 等价（同样完成分割、向量化并写入 Milvus）。
 - **④** 内置演示：文本语义检索、BM25 关键词检索、RRF 混合检索、以图搜图、图文融合检索。
-- **⑦⑧** 多轮对话问答：本地上下文库有该用户的相关记录时直接作答；**查不到会自动联网检索**，
-  并把答案写回 `t_context_collection`（联网所得记 `WebSearch`，历史上下文所得记 `AIMessage`），
-  因此同一问题问第二次通常可直接命中。两个入口共用同一套节点与图结构，改动需同步。
+- **⑦⑧** 多轮对话问答：本地上下文库有该用户的相关记录时直接作答；未命中时放宽条件再检索，
+  答案相关性低于 0.7 会停在人工审批（输入 `approve` 接受，或 `rejected` 转联网重新作答）。
+  凡走到 END 的回答都会写回 `t_context_collection`（联网所得记 `WebSearch`，历史上下文所得记
+  `AIMessage`），因此同一问题问第二次通常可直接命中。
+  **两个入口共用 `graph_builder.py` 里的同一份图**，改流程只需改这一处。
 - 凡会加载本地 gme 模型的入口（**②③④⑤⑥⑦⑧**），在**无外网环境**下建议前置两个环境变量：
 
 ```bash
