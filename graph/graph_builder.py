@@ -289,10 +289,19 @@ def new_run_config(username: str = "ZS") -> dict:
 
 
 def update_state(user_answer: str, config: dict) -> None:
-    """在工作流外面的普通函数中，让人工介入。"""
+    """在工作流外面的普通函数中，让人工介入。
+
+    rejected 表示「否决这条答案，改由联网兜底重新生成」，因此要同时**作废
+    evaluate_score**：那个分数描述的是刚被否决的答案，对即将联网生成的新答案没有意义。
+    不清除的话收尾写库会拿旧分数去判定新答案 —— 冷启动场景下旧分数几乎必然是低分
+    （被评的是「没有检索到」之类的兜底话术），会把联网搜到的好答案一并拦在库外。
+    """
     new_message = "approve" if user_answer == "approve" else "rejected"
+    values = {"human_answer": new_message}
+    if new_message == "rejected":
+        values["evaluate_score"] = None
     # 把人为输入存入图的 state 中
-    graph.update_state(config=config, values={"human_answer": new_message})
+    graph.update_state(config=config, values=values)
 
 
 def normalize_content(content) -> str:
@@ -348,4 +357,8 @@ async def save_final_answer(state_values: dict) -> None:
         username=state_values.get("username", "ZS"),
         message_type=message_type,
         evaluate_score=state_values.get("evaluate_score"),
+        # 本轮提问：写入器拿它当幂等键，同一个问题重复提问不会再落第二条。
+        # input_text 由 process_input 在每轮开头写入，取到的即本轮提问；
+        # 仅图片输入时为 None，此时写入器只做内容级去重。
+        question=state_values.get("input_text"),
     )
