@@ -19,6 +19,7 @@ workflow.py（命令行）与 workflow_gradio.py（Gradio 界面）都从这里�
 """
 
 import os
+import time
 import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -30,6 +31,7 @@ from langgraph.graph import StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.store.memory import InMemoryStore
 
+from embedding.gme_qwen2_vl_2b_embedding import call_local_model
 from graph.all_router import (
     route_evaluate_node,
     route_human_approval_node,
@@ -362,3 +364,21 @@ async def save_final_answer(state_values: dict) -> None:
         # 仅图片输入时为 None，此时写入器只做内容级去重。
         question=state_values.get("input_text"),
     )
+
+
+def warm_up_embedding() -> None:
+    """启动时预热嵌入模型。
+
+    模型权重首次加载的开销只在「第一次编码」时发生。不预热的话，这笔开销会落在
+    用户的第一句话上（实测一次首轮 53s，其中约 19s 纯粹是加载权重）；
+    预热后它被挪到服务启动阶段，此后每次编码只需几十毫秒。
+    具体数值随模型规格与设备而变，这里只作量级参考。
+    """
+    try:
+        t0 = time.time()
+        log.info("开始预热嵌入模型（首次加载权重）…")
+        call_local_model([{"text": "预热"}])
+        log.info(f"嵌入模型预热完成，耗时 {time.time() - t0:.2f}s")
+    except Exception as e:
+        # 预热只是优化，失败不影响启动：真正的加载会退回到首次编码时进行
+        log.exception(f"嵌入模型预热失败（不影响启动，首次编码时会重试）: {e}")

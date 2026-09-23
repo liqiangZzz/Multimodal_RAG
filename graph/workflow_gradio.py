@@ -17,7 +17,7 @@ from gradio import ChatMessage
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from embedding.gme_qwen2_vl_2b_embedding import call_local_model, image_to_base64
-from graph.graph_builder import graph, new_run_config, save_final_answer, update_state
+from graph.graph_builder import graph, new_run_config, save_final_answer, update_state, warm_up_embedding
 from utils.log_utils import log
 
 
@@ -308,22 +308,7 @@ with gr.Blocks(title='多模态RAG项目') as instance:
         [chat_input]  # 输出到输入框
     )
 
-def warm_up_embedding() -> None:
-    """启动时预热嵌入模型。
 
-    模型权重首次加载的开销只在「第一次编码」时发生。不预热的话，这笔开销会落在
-    用户的第一句话上（实测一次首轮 53s，其中约 19s 纯粹是加载权重）；
-    预热后它被挪到服务启动阶段，此后每次编码只需几十毫秒。
-    具体数值随模型规格与设备而变，这里只作量级参考。
-    """
-    try:
-        t0 = time.time()
-        log.info("开始预热嵌入模型（首次加载权重）…")
-        call_local_model([{"text": "预热"}])
-        log.info(f"嵌入模型预热完成，耗时 {time.time() - t0:.2f}s")
-    except Exception as e:
-        # 预热只是优化，失败不影响启动：真正的加载会退回到首次编码时进行
-        log.exception(f"嵌入模型预热失败（不影响启动，首次编码时会重试）: {e}")
 
 
 if __name__ == '__main__':

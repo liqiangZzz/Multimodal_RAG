@@ -15,7 +15,7 @@ import os
 from langchain_core.messages import HumanMessage
 
 from embedding.gme_qwen2_vl_2b_embedding import image_to_base64
-from graph.graph_builder import graph, new_run_config, save_final_answer, update_state
+from graph.graph_builder import graph, new_run_config, save_final_answer, update_state, warm_up_embedding
 from graph.print_messages import pretty_print_messages
 
 config = new_run_config()
@@ -85,4 +85,7 @@ async def main():
 
 
 if __name__ == '__main__':
+    # 先预热再开界面，避免把权重加载算进用户第一句话的等待时间
+    warm_up_embedding()
+
     asyncio.run(main())
