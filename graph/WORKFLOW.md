@@ -222,6 +222,18 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m graph.workflow_gradio
 | 审批恢复 | 下一行输入 `approve` / `rejected` | 同样；但用户不回审批直接问新问题时，自动开新 thread 放弃旧中断 |
 | 额外动作 | 无 | 启动时预热嵌入模型，把权重加载从用户第一句话挪到启动阶段 |
 
+例如：
+
+```markdown
+有界流和无界流有什么区别？
+Flink 是如何保证 exactly-once 语义的？
+Checkpoint 和 Savepoint 有什么区别？
+Flink 的状态管理机制是怎样的？
+流处理和批处理的核心差异是什么？
+Apache Flink 和 Spark Streaming 在容错机制上有什么不同？
+Event Time 和 Process Time 的区别是什么？
+```
+
 ## 运行方式
 
 必须从**项目根目录**以模块方式启动（直接跑脚本会因项目根不在 `sys.path` 报
