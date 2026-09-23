@@ -11,7 +11,7 @@ from langchain_core.documents import Document
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
-from embedding_demo.custom_embedding import ModernQwen2Embeddings
+from embedding.custom_embedding import ModernQwen2Embeddings
 from milvus_db.db_operator import do_save_to_milvus
 from utils.common_utils import get_sorted_md_files
 from utils.log_utils import log
@@ -48,7 +48,7 @@ class MarkdownDirSplitter:
         # 全链路统一使用多模态嵌入 gme-Qwen2-VL-2B-Instruct（1536 维，与 Milvus dense 字段同源），
         # 语义切分与文档向量化同模型，切分相似度判断与检索侧向量空间保持一致。
         # 运行环境：统一的 conda 环境 Multimodal_RAG（transformers 4.51.3 锁版），无需切换环境。
-        self.embedding = ModernQwen2Embeddings("Alibaba-NLP/gme-Qwen2-VL-2B-Instruct")  # 多模态嵌入
+        self.embedding = ModernQwen2Embeddings()  # 多模态嵌入
         self.semantic_splitter = SemanticChunker(
             self.embedding, breakpoint_threshold_type="percentile"
         )
