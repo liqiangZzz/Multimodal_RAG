@@ -15,13 +15,12 @@ def route_only_image(state: MultimodalRAGState):
 def route_llm_or_retriever(state: MultimodalRAGState):
     """
     动态路由函数：
-    - 命中历史上下文 -> second_chatbot（基于上下文作答）
-    - 未命中（本地上下文库没有可用内容）-> web_search_node（直接联网检索，结果随后写回向量库）
+    - 命中历史上下文 -> second_chatbot（基于工具返回的上下文作答）
+    - 未命中（工具返回空 / 低于 0.5 分门槛被清空）-> retriever_node（放宽条件再检索一遍，
+      结果写入 state['context_retrieved']，交给 third_chatbot 作答）
 
-    说明：未命中时**不再**进入 retriever_node。
-    retriever_node 不做任何相关性门槛，会把无价值的命中（例如上一轮自己写回的兜底话术）
-    当作"上下文"喂给模型，导致回答只能复述兜底话术，进而被评估判 0 分、卡在人工审批。
-    联网兜底才是"本地没有"时的正确出口。retriever_node 仍保留给 only_image 路径使用。
+    联网不是在这一步触发的：本地答不好会先经过 evaluate_node 评估，
+    分数低于 0.7 走人工审批，用户 rejected 之后才由 fourth_chatbot 联网兜底重新作答。
     """
     if messages := state.get("messages", []):
         tool_message = messages[-1]
@@ -29,7 +28,7 @@ def route_llm_or_retriever(state: MultimodalRAGState):
         raise ValueError("No message found in input")
 
     if not tool_message.content or tool_message.content == "没有找到相关的历史上下文信息。":
-        return "web_search_node"
+        return "retriever_node"
     return 'second_chatbot'
 
 
