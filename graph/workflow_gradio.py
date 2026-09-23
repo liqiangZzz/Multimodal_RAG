@@ -9,13 +9,14 @@
 """
 
 import os
+import time
 from typing import Dict, List
 
 import gradio as gr
 from gradio import ChatMessage
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from embedding.gme_qwen2_vl_2b_embedding import image_to_base64
+from embedding.gme_qwen2_vl_2b_embedding import call_local_model, image_to_base64
 from graph.graph_builder import graph, new_run_config, save_final_answer, update_state
 from utils.log_utils import log
 
@@ -191,6 +192,14 @@ async def submit_llm(history: List[Dict]):
             return
 
     # ---- 执行工作流 ----
+    # 从提交到第一个 token 之间有一段空档：工具节点要做嵌入编码、混合检索，
+    # 再等外部评委打分。这期间前端没有增量输出、输入框又被禁用，
+    # 看起来和"卡死"没有区别（2026-09-23 曾因此误判为阻塞）。
+    # 先放一条占位提示，第一个 token 到达时会被原地覆盖。
+    _PLACEHOLDER = "🔍 正在检索历史对话上下文，请稍候…"
+    history.append({"role": "assistant", "content": _PLACEHOLDER})
+    yield history
+
     full_response = ""
 
     async for chunk in graph.astream(
@@ -215,6 +224,7 @@ async def submit_llm(history: List[Dict]):
                 if (history and isinstance(history[-1], dict)
                         and history[-1].get("role") == "assistant"
                         and not history[-1].get("metadata", {}).get("title")):
+                    # 首条 token 到达时，这里原地覆盖掉上面的占位提示
                     history[-1]["content"] = full_response
                 else:
                     history.append({"role": "assistant", "content": full_response})
@@ -230,6 +240,10 @@ async def submit_llm(history: List[Dict]):
                 # 工具节点（search_context / my_search）产出的 ToolMessage
                 for message in update.get("messages", []):
                     if isinstance(message, ToolMessage):
+                        # 工具提示已经说明在干什么了，占位提示就该退场
+                        if (history and isinstance(history[-1], dict)
+                                and history[-1].get("content") == _PLACEHOLDER):
+                            history.pop()
                         title = ("🛠️ 工具调用: 互联网搜索" if message.name == "my_search"
                                  else f"🛠️ 工具调用: {message.name}")
                         history.append(ChatMessage(
@@ -294,7 +308,28 @@ with gr.Blocks(title='多模态RAG项目') as instance:
         [chat_input]  # 输出到输入框
     )
 
+def warm_up_embedding() -> None:
+    """启动时预热嵌入模型。
+
+    模型权重首次加载的开销只在「第一次编码」时发生。不预热的话，这笔开销会落在
+    用户的第一句话上（实测一次首轮 53s，其中约 19s 纯粹是加载权重）；
+    预热后它被挪到服务启动阶段，此后每次编码只需几十毫秒。
+    具体数值随模型规格与设备而变，这里只作量级参考。
+    """
+    try:
+        t0 = time.time()
+        log.info("开始预热嵌入模型（首次加载权重）…")
+        call_local_model([{"text": "预热"}])
+        log.info(f"嵌入模型预热完成，耗时 {time.time() - t0:.2f}s")
+    except Exception as e:
+        # 预热只是优化，失败不影响启动：真正的加载会退回到首次编码时进行
+        log.exception(f"嵌入模型预热失败（不影响启动，首次编码时会重试）: {e}")
+
+
 if __name__ == '__main__':
+    # 先预热再开界面，避免把权重加载算进用户第一句话的等待时间
+    warm_up_embedding()
+
     # 启动 Gradio 应用
     instance.launch(
         debug=True,
