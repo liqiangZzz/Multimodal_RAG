@@ -75,7 +75,8 @@ first_chatbot（LLM 调用 search_context 工具）
 > 模型实例由 `embedding/gme_qwen2_vl_2b_embedding.py` 以进程内单例持有（`load_model()`），
 > `ModernQwen2Embeddings` 复用该实例，因此**全项目只加载一份 2B 权重**。
 > 适配层只依赖基座的 `encode_inputs`，没有 `__init__`，**实例化不触发加载**，
-> 首次编码时才懒加载（约 15~20 秒，属正常现象）。
+> 首次编码时才懒加载（一次性权重加载，某次实测约 19 秒，此后单次文本编码为毫秒级）。
+> `workflow_gradio` 启动时会先预热，把加载开销挪到 `launch()` 之前，不占用首轮请求时间。
 > 该模型带自定义模块，必须在 `transformers==4.51.3` 下加载（依赖已锁版，见 `venv.txt`）。
 > Milvus 集合的 `dense` 字段维度 **1536** 即由该模型决定，**换模型必须重建集合**。
 
@@ -120,7 +121,7 @@ first_chatbot（LLM 调用 search_context 工具）
 │   ├── save_context.py                 #   答案写回上下文库（含写库质量闸门）
 │   ├── print_messages.py               #   运行时消息打印辅助
 │   └── graph_db/                       #   graph 专属向量库代码（不与根 milvus_db 同名）
-│       ├── collections_operator_graph.py  # t_context_collection 集合定义（BM25 + dense）
+│       ├── collections_operator_graph.py  # t_context_collection 集合定义（BM25 + dense + question 幂等键）
 │       └── db_retriever_graph.py          # MilvusRetriever 多路混合检索器
 ├── models/
 │   └── init_chat_model_llm.py          #   LLM 客户端统一初始化（GLM / DeepSeek / ZhipuAI）
@@ -233,6 +234,17 @@ first_chatbot（LLM 调用 search_context 工具）
   **包含用户的原始提问词**，一旦写回，下一轮同类提问就会命中它 → 上下文评分 0 →
   又生成同样话术 → 又写回去，形成每轮加毒且永不自愈的「冷启动自锁」。
   闸门放在写入器内部，两个入口同时受保护。
+- **写库幂等闸门**：质量闸门之后还有两道判重（同在 `save_context` 内部）——
+  **问题级**：`question` 字段存归一化提问（`normalize_question` 抹掉空白/标点并转小写），
+  写入前服务端等值匹配，同一问题反复提问不会落第二条；**内容级**：答案向量与库内
+  top-1 相似度 ≥ `DUP_SIM_THRESHOLD` 视为已有等价内容，兜住「换说法问同一件事」，
+  也覆盖 `question` 为空的纯图片输入。判据查询失败时按「不重复」放行——去重是优化项，
+  不能因为它出错而丢掉本轮回答。
+- **外部评委显式超时**：ragas 评委是外部 LLM 调用，未显式限制时一旦接口挂起，
+  会拖到 HTTP 客户端默认超时（可达十分钟级）而卡死整轮对话。`search_context`
+  （`CONTEXT_EVAL_TIMEOUT`）与 `evaluate_node`（`ANSWER_EVAL_TIMEOUT`）均以
+  `asyncio.wait_for` 设上限：前者超时按「无法判定 → 放行检索结果」处理，
+  后者按低分转人工审批兜底；底层 OpenAI 兼容客户端也显式配置了超时与重试次数。
 - **两条检索路径的差异（已知，未消除）**：`tools.search_context` 带 0.5 分门槛，
   `retriever_node` 不带门槛。未命中时走 `retriever_node` 是本流程的设计选择，
   代价是无价值的命中（如上一轮写回的兜底话术）也会被当作上下文喂给 `third_chatbot`；
@@ -329,8 +341,10 @@ python -m graph.workflow_gradio                   # ⑧ 多轮对话问答（Gra
 - **⑦⑧** 多轮对话问答：本地上下文库有该用户的相关记录时直接作答；未命中时放宽条件再检索，
   答案相关性低于 0.7 会停在人工审批（输入 `approve` 接受，或 `rejected` 转联网重新作答）。
   凡走到 END 的回答都会写回 `t_context_collection`（联网所得记 `WebSearch`，历史上下文所得记
-  `AIMessage`），因此同一问题问第二次通常可直接命中。
-  **两个入口共用 `graph_builder.py` 里的同一份图**，改流程只需改这一处。
+  `AIMessage`），因此同一问题问第二次通常可直接命中；写回带幂等判重，
+  同一问题或库内已有等价答案不会再重复落库。
+  **两个入口共用 `graph_builder.py` 里的同一份图**，改流程只需改这一处；
+  Gradio 入口启动时会预热嵌入模型，首轮请求不含模型加载时间。
 - 凡会加载本地 gme 模型的入口（**②③④⑤⑥⑦⑧**），在**无外网环境**下建议前置两个环境变量：
 
 ```bash
