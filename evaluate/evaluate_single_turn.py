@@ -2,10 +2,17 @@ import time
 from typing import List, Dict
 
 from ragas.llms import llm_factory
-from ragas.metrics import ContextRelevance
-from ragas.metrics.collections import AnswerRelevancy, ContextPrecision, ContextPrecisionWithoutReference
+# 注意：四个指标必须全部来自 ragas.metrics.collections（新版 API，有异步 ascore）。
+# ragas.metrics 下的同名指标是旧版（NVIDIA 系列），只有单轮同步接口
+# single_turn_ascore(sample)，没有 ascore，混用会报 AttributeError。
+from ragas.metrics.collections import (
+    AnswerRelevancy,
+    ContextPrecision,
+    ContextPrecisionWithoutReference,
+    ContextRelevance,
+)
 
-from embedding_demo.custom_embedding import ModernQwen2Embeddings
+from embedding.custom_embedding import ModernQwen2Embeddings
 from milvus_db.collections_operator import client
 from milvus_db.db_retriever import MilvusRetriever
 from models.init_chat_model_llm import glm_llm_flash, async_glm_llm_flash_client
@@ -120,9 +127,12 @@ class RAGEvaluator:
     async def evaluate_answer(self, question: str, contexts: List[Dict], response: str) -> float:
         """
         评估生成的答案（质量）是否与用户输入相关。
+
         Args:
             question: 用户问题
-            contexts: 检索到的上下文列表（Dict 列表，需含 'text' 字段）
+            contexts: 保留参数，**当前不参与打分**。本方法使用的指标是
+                AnswerRelevancy（答案与问题是否相关），它只需要 question 和 response。
+                上下文相关性的把关由 tools.search_context 内部的 evaluate_context 负责。
             response: LLM生成的答案
         Returns:
             float: 答案相关性（Response Relevancy）评估分数
@@ -181,7 +191,7 @@ class RAGEvaluator:
 
 async def main():
     evaluator_llm = llm_factory("glm-5.3-flash", client=async_glm_llm_flash_client)
-    evaluator_embedding = ModernQwen2Embeddings("Alibaba-NLP/gme-Qwen2-VL-2B-Instruct")
+    evaluator_embedding = ModernQwen2Embeddings()
 
     # 创建 RAG 评估器
     rag_evaluator = RAGEvaluator(evaluator_llm, evaluator_embedding)

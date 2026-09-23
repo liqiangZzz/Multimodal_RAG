@@ -18,7 +18,7 @@ from ragas.metrics.collections import (
     TopicAdherence,
 )
 
-from embedding_demo.custom_embedding import ModernQwen2Embeddings
+from embedding.custom_embedding import ModernQwen2Embeddings
 from milvus_db.collections_operator import client
 from milvus_db.db_retriever import MilvusRetriever
 from models.init_chat_model_llm import glm_llm_flash, async_glm_llm_flash_client
@@ -248,7 +248,7 @@ async def main():
     # ---------- 初始化评估 LLM ----------
     # 注意：async_glm_llm_flash_client 必须是 AsyncOpenAI 兼容的异步客户端
     evaluator_llm = llm_factory("glm-5.3-flash", client=async_glm_llm_flash_client,max_tokens=4096)
-    evaluator_embedding = ModernQwen2Embeddings("Alibaba-NLP/gme-Qwen2-VL-2B-Instruct")
+    evaluator_embedding = ModernQwen2Embeddings()
 
     multi_turn_evaluator = MultiTurnRAGEvaluator(
         evaluator_llm, evaluator_embedding
