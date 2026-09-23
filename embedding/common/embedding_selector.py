@@ -19,14 +19,14 @@ Embedding 后端选择器。
     - BASE_BACKOFF : float
 """
 
-from utils.embedding_config import EMBEDDING_BACKEND
+from embedding.common.embedding_config import EMBEDDING_BACKEND
 
 
 if EMBEDDING_BACKEND == "cloud":
     # ---- 云端 DashScope ----
     # 限流在 multimodal_embedding.call_dashscope_once() 内部完成。
     # 调用方无需也不应再调用 limiter.acquire()。
-    from utils.multimodal_embedding import (
+    from embedding.multimodal_embedding import (
         build_work_items,
         process_item_with_guard,
         RETRY_ON_429,
@@ -38,7 +38,7 @@ if EMBEDDING_BACKEND == "cloud":
 
 elif EMBEDDING_BACKEND == "local":
     # ---- 本地 GME ----
-    from utils.gme_qwen2_vl_2b_embedding import (
+    from embedding.gme_qwen2_vl_2b_embedding import (
         build_work_items,
         process_item_with_guard,
     )

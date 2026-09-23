@@ -10,9 +10,12 @@
     - 'text_image' : 文本 + 图片融合
 
 模型信息：
-    - 向量维度：1536
-    - 最大序列长度：32768
+    - 向量维度：1536（已做 L2 归一化）
     - 模型大小：2.21B 参数
+
+全项目只有本模块创建模型实例（进程内单例），
+`embedding.custom_embedding` 的 ModernQwen2Embeddings 复用这里的实例，
+因此语义切分 / 向量化 / 检索 / 评估共用同一份权重，不会重复加载。
 """
 
 import os
@@ -21,11 +24,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["MALLOC_STACK_LOGGING"] = "0"  # 尝试关闭 macOS malloc 日志
 import base64
 import mimetypes
+from io import BytesIO
 from typing import Tuple, List, Dict, Optional, Union
 
-import torch
 from PIL import Image
-from transformers import AutoModel, AutoProcessor
+from sentence_transformers import SentenceTransformer
 
 # ========= 配置区 =========
 
@@ -34,67 +37,78 @@ MODEL_NAME = "Alibaba-NLP/gme-Qwen2-VL-2B-Instruct"
 # 若已下载到本地，可改为路径，例如：
 # MODEL_NAME = "/path/to/gme-Qwen2-VL-2B-Instruct"
 
-# 设备选择：自动检测 CUDA / MPS / CPU
-DEVICE = (
-    "cuda" if torch.cuda.is_available()
-    else "mps" if torch.backends.mps.is_available()
-    else "cpu"
-)
-
-# 数据类型：GPU 用 float16，CPU/MPS 用 float32
-TORCH_DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
-
 # 指数退避算法的基础等待时间（秒）
 BASE_BACKOFF = 2.0
 
 # 图片最大体积（本地文件检查），超过则跳过
 MAX_IMAGE_BYTES = 3 * 1024 * 1024  # 3MB
 
-# 默认指令模板（用于查询端）
-DEFAULT_INSTRUCTION = "Find an image that matches the given text."
-
 # ======== 配置区结束 =========
 
 
-# ========= 全局模型实例 =========
+# ========= 全局模型实例（进程内单例，全项目共享） =========
 
-_model = None
-_processor = None
+_models: Dict[str, SentenceTransformer] = {}
 
 
-def load_model():
-    """延迟加载本地模型（单例模式）。
+def load_model(model_name: str = MODEL_NAME) -> SentenceTransformer:
+    """加载本地 GME 模型（进程内单例，全项目共用同一份）。
 
-    首次调用时加载模型和处理器，后续调用直接返回已加载的实例。
+    统一走 sentence-transformers 官方接口：
+      - trust_remote_code=True 启用模型自带的 MultiModalTransformer；
+      - local_files_only=True 只读本地缓存，避免联网校验拖慢启动；
+      - device=None 由 sentence-transformers 自动选择 cuda / mps / cpu。
+
+    模型自带的 processor 会按 config 的 min/max_image_tokens（256 / 1280）构建，
+    与官方示例一致，因此这里不需要再单独建 AutoProcessor。
+
+    Args:
+        model_name: 模型名或本地路径
 
     Returns:
-        Tuple: (model, processor)
+        SentenceTransformer: 共享的模型实例（重复调用只加载一次）
     """
-    global _model, _processor
-
-    if _model is None:
-        print(f"[模型] 正在加载 {MODEL_NAME} ...")
-        print(f"[模型] 设备：{DEVICE}，数据类型：{TORCH_DTYPE}")
-
-        # 加载处理器（用于图片预处理）
-        _processor = AutoProcessor.from_pretrained(
-            MODEL_NAME,
+    if model_name not in _models:
+        print(f"[模型] 正在加载 {model_name} ...")
+        _models[model_name] = SentenceTransformer(
+            model_name,
+            local_files_only=True,
             trust_remote_code=True,
-            use_fast=False,  # 显式声明，消除警告
+            device=None,  # 自动选择 cuda / mps / cpu
         )
+        model = _models[model_name]
+        print(f"[模型] 加载完成。设备：{model.device}，向量维度：1536")
 
-        # 加载模型（AutoModel 会自动识别为 GmeQwen2VL 类）
-        _model = AutoModel.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=TORCH_DTYPE,
-            device_map=DEVICE,
-            trust_remote_code=True,
-        )
-        _model.eval()
+    return _models[model_name]
 
-        print(f"[模型] 加载完成。向量维度：1536")
 
-    return _model, _processor
+def encode_inputs(inputs: List[Dict]) -> List[List[float]]:
+    """通用编码入口（本模块与 ModernQwen2Embeddings 共用，保证只有一份模型）。
+
+    Args:
+        inputs: gme 要求的 dict 列表，每项形如：
+                - {"text": "..."}                    纯文本
+                - {"image": <PIL/路径/URL/base64>}    纯图片
+                - {"text": "...", "image": ...}      图文融合
+                可选 {"prompt": "..."} 指定指令（不传则用模型默认指令）
+
+    Returns:
+        List[List[float]]: 每项的 1536 维 L2 归一化向量
+    """
+    embeddings = load_model().encode(
+        inputs,
+        convert_to_tensor=False,
+        normalize_embeddings=True,
+    )
+    # numpy array 直接 .tolist()
+    if hasattr(embeddings, "tolist"):
+        return embeddings.tolist()
+
+    # torch tensor 逐条转换
+    return [
+        e.cpu().tolist() if hasattr(e, "cpu") else list(e)
+        for e in embeddings
+    ]
 
 
 # ========= 图片处理工具 =========
@@ -218,6 +232,28 @@ def normalize_image(img: str) -> Tuple[str, str]:
 
 # ========= 本地模型推理 =========
 
+def image_to_data_uri(image: Union[str, Image.Image]) -> str:
+    """把图像统一成字符串形式的引用。
+
+    sentence-transformers 的 encode 会先按 len() 对输入排序，而 PIL.Image 没有 len()，
+    直接传 PIL 会报 `TypeError: object of type 'Image' has no len()`；
+    因此传给模型前统一用字符串：原本就是字符串（URL / 本地路径 / data URI）直接返回，
+    PIL.Image 则转成 base64 data URI（模型的 fetch_image 原生支持这种写法）。
+
+    Args:
+        image: PIL.Image 或字符串形式的图像引用
+
+    Returns:
+        str: 可直接交给模型的图像引用字符串
+    """
+    if isinstance(image, str):
+        return image
+
+    buf = BytesIO()
+    image.save(buf, format="PNG")  # PNG 无损，与直接传 PIL 的像素一致
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 def get_text_embedding(
         text: str,
         instruction: Optional[str] = None,
@@ -226,20 +262,17 @@ def get_text_embedding(
 
     Args:
         text: 文本内容
-        instruction: 可选指令（用于查询端），如 "Find an image that matches the given text."
+        instruction: 可选指令（查询端）。当前调用方均不传，
+            未传时使用模型默认指令（"You are a helpful assistant."）；
+            如需指定，会作为 dict 的 prompt 键交给模型。
 
     Returns:
         嵌入向量（list of float，维度 1536）
     """
-    model, _ = load_model()
-
-    with torch.no_grad():
-        embedding = model.get_text_embeddings(
-            texts=[text],
-            instruction=instruction,
-        )
-
-    return embedding[0].cpu().float().numpy().tolist()
+    item: Dict = {"text": text}
+    if instruction:
+        item["prompt"] = instruction
+    return encode_inputs([item])[0]
 
 
 def get_image_embedding(
@@ -251,18 +284,13 @@ def get_image_embedding(
         image: 图片输入（URL、本地路径、PIL.Image 对象、base64 data URI）
 
     Returns:
-        嵌入向量（list of float，维度 1536）
+        嵌入向量（list of float，维度 1536），图片无效时返回 []
     """
-    model, _ = load_model()
-
     pil_image = load_image(image)
     if pil_image is None:
         return []
 
-    with torch.no_grad():
-        embedding = model.get_image_embeddings(images=[pil_image])
-
-    return embedding[0].cpu().float().numpy().tolist()
+    return encode_inputs([{"image": image_to_data_uri(pil_image)}])[0]
 
 
 def get_fused_embedding(
@@ -276,21 +304,13 @@ def get_fused_embedding(
         image: 图片输入（URL、本地路径、PIL.Image 对象、base64 data URI）
 
     Returns:
-        嵌入向量（list of float，维度 1536）
+        嵌入向量（list of float，维度 1536），图片无效时返回 []
     """
-    model, _ = load_model()
-
     pil_image = load_image(image)
     if pil_image is None:
         return []
 
-    with torch.no_grad():
-        embedding = model.get_fused_embeddings(
-            texts=[text],
-            images=[pil_image],
-        )
-
-    return embedding[0].cpu().float().numpy().tolist()
+    return encode_inputs([{"text": text, "image": image_to_data_uri(pil_image)}])[0]
 
 
 # ========= 核心处理逻辑 =========
@@ -314,8 +334,6 @@ def call_local_model(
         - retry_after: 本地模型无需重试，始终为 None
     """
     try:
-        load_model()
-
         # 解析输入
         item = input_data[0] if input_data else {}
 
