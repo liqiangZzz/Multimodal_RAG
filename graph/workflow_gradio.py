@@ -13,7 +13,7 @@ from typing import Dict, List
 
 import gradio as gr
 from gradio import ChatMessage
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from embedding.gme_qwen2_vl_2b_embedding import image_to_base64
 from graph.graph_builder import graph, new_run_config, save_final_answer, update_state
@@ -207,7 +207,10 @@ async def submit_llm(history: List[Dict]):
             if not isinstance(payload, tuple) or len(payload) != 2:
                 continue
             msg, _meta = payload
-            if msg.content:
+            # 只追加模型输出（AIMessageChunk 是 AIMessage 的子类）；
+            # stream_mode='messages' 也会带出 ToolMessage 等非模型消息，
+            # 若不过滤会把工具返回内容混进回答气泡里。
+            if isinstance(msg, AIMessage) and msg.content:
                 full_response += msg.content
                 if (history and isinstance(history[-1], dict)
                         and history[-1].get("role") == "assistant"
