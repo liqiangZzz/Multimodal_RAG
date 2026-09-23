@@ -7,7 +7,11 @@ from typing import Dict, Any, Tuple
 from pymilvus import MilvusClient
 
 from embedding.custom_embedding import ModernQwen2Embeddings
-from graph.graph_db.collections_operator_graph import CONTEXT_COLLECTION_NAME, client
+from graph.graph_db.collections_operator_graph import (
+    CONTEXT_COLLECTION_NAME,
+    MAX_CONTEXT_TEXT_LENGTH,
+    client,
+)
 from utils.log_utils import log
 
 # 全局线程池用于异步操作
@@ -235,6 +239,16 @@ class OptimizedMilvusAsyncWriter:
         if not keep:
             log.info(f"[Milvus] 跳过写入（{reason}）：{(context_text or '')[:60]!r}")
             return
+
+        # 字段长度保护：context_text 是定长 VARCHAR，超限会被服务端整条拒绝（写入失败）。
+        # 这里在入库前按上限截断 —— 截断必须发生在向量计算之前，
+        # 保证稠密向量与实际落库的文本一致，内容级去重的相似度才有意义。
+        if context_text and len(context_text) > MAX_CONTEXT_TEXT_LENGTH:
+            log.warning(
+                f"[Milvus] 回答长度 {len(context_text)} 超过字段上限 {MAX_CONTEXT_TEXT_LENGTH}，"
+                f"入库前截断（截去 {len(context_text) - MAX_CONTEXT_TEXT_LENGTH} 字符）"
+            )
+            context_text = context_text[:MAX_CONTEXT_TEXT_LENGTH]
 
         # 向量只算一次：去重判据与最终写入共用同一个向量
         dense_vector = self._get_dense_vector(context_text)

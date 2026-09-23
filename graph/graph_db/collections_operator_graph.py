@@ -5,6 +5,10 @@ from utils.env_utils import MILVUS_URI
 # 长期历史记录存储的集合名称
 CONTEXT_COLLECTION_NAME = 't_context_collection'
 
+# context_text 字段的上限（字符数）。schema 定义与写入端截断必须引用同一个常量，
+# 改这里即可同时生效；超限内容由 save_context 在入库前截断，否则服务端会整条拒绝。
+MAX_CONTEXT_TEXT_LENGTH = 6000
+
 # ========== 1. 连接 Milvus ==========
 client = MilvusClient(
     uri=MILVUS_URI,
@@ -24,8 +28,8 @@ def create_store_collection():
     schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True, auto_id=True)
 
     # 某一条聊天记录的文本内容
-    schema.add_field(field_name="context_text", datatype=DataType.VARCHAR, max_length=6000, enable_analyzer=True,
-                     analyzer_params={"tokenizer": "jieba", "filter": ["cnalphanumonly"]})
+    schema.add_field(field_name="context_text", datatype=DataType.VARCHAR, max_length=MAX_CONTEXT_TEXT_LENGTH,
+                     enable_analyzer=True, analyzer_params={"tokenizer": "jieba", "filter": ["cnalphanumonly"]})
 
     # 用户名
     schema.add_field(field_name="username", datatype=DataType.VARCHAR, max_length=100, nullable=True)
