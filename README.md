@@ -6,6 +6,13 @@
 最终支持 **语义检索、BM25 关键词检索、以图搜图、图文融合、RRF 混合检索** 等多种召回方式，
 为后续大模型问答（RAG）提供图文一体的高质量上下文。
 
+项目包含两条链路，**使用不同的向量集合，互不影响**：
+
+| 链路 | 入口 | 向量集合 | 用途 |
+|---|---|---|---|
+| 文档知识库 | `main.py` / `splitters/splitters_md.py` | `t_doc_collection` | PDF → OCR → 分割 → 向量化 → 入库，面向文档检索 |
+| 多轮对话 RAG 工作流 | `python -m graph.workflow[_gradio]` | `t_context_collection` | 基于该用户的历史问答作答，**本地查不到自动联网**并写回 |
+
 ## 整体流程
 
 ```
@@ -26,6 +33,26 @@ Milvus 集合 t_doc_collection（dense 1536 维 + BM25 稀疏向量）
   ▼
 dense_search / sparse_search / image_search /
 multimodal_search / hybrid_search（RRF 融合）
+```
+
+多轮对话 RAG 工作流（`graph/`）是另一条链路，用 LangGraph 编排、独立于上面的文档链路：
+
+```
+用户提问（文本 / 图片 / 图文）
+  │  process_input 判别输入类型
+  ▼
+first_chatbot（LLM 调用 search_context 工具）
+  │  search_context：文本 → gme 嵌入 → 按 username 过滤 → hybrid_search（RRF）
+  ▼
+上下文相关性评分 ≥ 0.5 ？
+  ├── 是 → second_chatbot 基于历史对话上下文作答
+  └── 否 → web_search_node 联网检索 → fourth_chatbot 基于搜索结果作答
+  ▼
+evaluate_node（答案相关性）
+  ├── ≥ 0.7 → END，答案自动写回 t_context_collection
+  └── < 0.7 → 人工审批：approve → END ／ rejected → 联网重新作答
+
+（仅输入图片时走另一条支线：process_input → retriever_node → third_chatbot → …）
 ```
 
 ## 嵌入模型
@@ -78,6 +105,19 @@ multimodal_search / hybrid_search（RRF 融合）
 ├── evaluate/                           # RAG 效果评估（Ragas 指标）
 │   ├── evaluate_single_turn.py         #   单轮评估：上下文相关性 / 答案相关性 / 精确度
 │   └── evaluate_multi_turn.py          #   多轮评估：目标达成度 / 主题一致性
+├── graph/                              # ⑥ 多轮对话 RAG 工作流（LangGraph，独立于文档链路）
+│   ├── workflow.py                     #   命令行入口：python -m graph.workflow
+│   ├── workflow_gradio.py              #   Gradio 界面入口：python -m graph.workflow_gradio
+│   ├── custom_state.py                 #   图状态：输入类型 / 检索结果 / 评估分数 / 用户名
+│   ├── all_router.py                   #   全部条件路由函数
+│   ├── tools.py                        #   search_context（查历史对话）/ my_search（智谱联网）
+│   ├── search_node.py                  #   自定义上下文检索工具节点 + retriever_node
+│   ├── evaluate_node.py                #   答案相关性评估节点
+│   ├── save_context.py                 #   答案写回上下文库（含写库质量闸门）
+│   ├── print_messages.py               #   运行时消息打印辅助
+│   └── graph_db/                       #   graph 专属向量库代码（不与根 milvus_db 同名）
+│       ├── collections_operator_graph.py  # t_context_collection 集合定义（BM25 + dense）
+│       └── db_retriever_graph.py          # MilvusRetriever 多路混合检索器
 ├── models/
 │   └── init_chat_model_llm.py          #   LLM 客户端统一初始化（GLM / DeepSeek / ZhipuAI）
 ├── data/                               # 输入数据（示例 PDF、以图搜图测试图片）
@@ -147,6 +187,56 @@ multimodal_search / hybrid_search（RRF 融合）
 - 四个单轮指标统一取自 `ragas.metrics.collections`（新版 API，具备异步 `ascore`）；
   `ragas.metrics` 下的同名指标是旧版实现、只有同步单轮接口，**不要混用**，否则会抛 `AttributeError`。
 
+### 6. 多轮对话 RAG 工作流（graph）
+
+用 **LangGraph** 把「历史上下文检索 → 评估 → 人工审批 → 联网兜底 → 写回向量库」串成一张图，
+命令行与 Gradio 两个入口共用同一套节点与图结构。
+
+**状态**（`custom_state.py`，继承 LangGraph 的 `MessagesState`）：
+`input_type`（`has_text` / `only_image`）、`context_retrieved`、`image_retrieved`、
+`web_search_result`、`evaluate_score`、`human_answer`、`username`、`input_text` / `input_image`。
+
+**节点**
+
+| 节点 | 作用 |
+|---|---|
+| `process_input` | 判别输入类型（纯文本 / 纯图片 / 图文），写入状态 |
+| `first_chatbot` | 绑定 `search_context` 工具的 LLM，决定检索 |
+| `search_context` | 自定义工具节点：把状态里的 `username` 显式传给工具并并行执行 |
+| `second_chatbot` | 基于检索到的历史对话上下文作答 |
+| `third_chatbot` | 纯图片支线：基于 `retriever_node` 的结果作答 |
+| `web_search_node` | **确定性**联网检索节点（直接调 `my_search`，不依赖模型自主决定调工具） |
+| `fourth_chatbot` | 基于网络搜索结果作答，并给消息打上 `answer_source` 标记 |
+| `evaluate_node` | 答案相关性评估（AnswerRelevancy） |
+| `human_approval` | 静态中断点，由人工输入 `approve` / `rejected` |
+
+**要点**
+
+- **本地查不到就联网**：`search_context` 未命中（或上下文相关性 < 0.5）时**不进入**
+  `retriever_node`，而是直接联网检索；`retriever_node` 只服务纯图片支线。
+  原因是它不带任何相关性门槛，会把无价值的命中（如上一轮自己写回的兜底话术）当作"上下文"
+  喂给模型，导致回答只能复述兜底话术、被评估判 0 分、进而卡在人工审批。
+- **两道分数门槛**：上下文相关性 **0.5**（`tools.py`，判定"本地内容够不够格"）、
+  答案相关性 **0.7**（`all_router.py`，判定"要不要转人工审批"）。
+- **写回带来源标记**：写库时 `message_type` 取自消息对象上的 `answer_source` ——
+  联网所得记 `WebSearch`，历史上下文所得记 `AIMessage`。标记必须挂在**消息**上而非 state 字段：
+  state 在同一 thread 内跨轮累积，用字段会把后续轮次一起误标。
+- **写库质量闸门**：`save_context.is_worth_saving()` 会拒绝写入兜底话术（命中"没有检索到"等特征）
+  或答案相关性低于 `0.3` 的回答。原因：上下文库是「上一轮写、下一轮读」，而兜底话术
+  **包含用户的原始提问词**，一旦写回，下一轮同类提问就会命中它 → 上下文评分 0 →
+  又生成同样话术 → 又写回去，形成每轮加毒且永不自愈的"冷启动自锁"。
+
+**运行**（必须以**模块方式**从项目根执行；直接 `python graph/workflow.py` 会因项目根不在
+`sys.path` 而报 `No module named 'graph'`）
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m graph.workflow         # 命令行问答
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m graph.workflow_gradio  # Gradio 界面
+```
+
+> 上下文集合需先创建：`python -m graph.graph_db.collections_operator_graph`。
+> **该脚本会先 drop 同名集合**（开发期重建用），执行会清空已有数据，日常流程不要跑。
+
 ## 环境准备
 
 ### 1. 创建 conda 环境
@@ -175,7 +265,7 @@ cp .env.example .env
 | `EMBEDDING_BACKEND`            | `local`（本地 GME，默认）/ `cloud`（DashScope）               |
 | `ALIBABA_API_KEY`              | 选用 `cloud` 后端时必填                                     |
 | `MILVUS_URI`                   | Milvus 地址，默认 `http://127.0.0.1:19530`                |
-| `MILVUS_COLLECTION_NAME`       | 集合名，默认 `t_doc_collection`                            |
+| `MILVUS_COLLECTION_NAME`       | 文档集合名，默认 `t_doc_collection`（上下文集合固定为 `t_context_collection`，定义在 graph 代码中） |
 | `GLM_API_KEY` / `GLM_BASE_URL` | 评估用 GLM（`glm-5.3-flash`，OpenAI 兼容接口）                  |
 | `ZHIPU_API_KEY`                | 智谱 AI 密钥（用于 `init_chat_model_llm.py` 中的 ZhipuAI 客户端） |
 
@@ -197,11 +287,14 @@ python embedding/common/download_model_embedding.py
 
 | 入口                                  | 作用            | 说明                                 |
 |-------------------------------------|---------------|------------------------------------|
-| `milvus_db/collections_operator.py` | 初始化向量集合       | 仅建表，首次使用前执行一次                      |
+| `milvus_db/collections_operator.py` | 初始化文档集合      | 仅建表，首次使用前执行一次                      |
+| `graph/graph_db/collections_operator_graph.py` | 初始化上下文集合 | **会先 drop 同名集合**，慎跑（见下方模块 6）      |
 | `splitters/splitters_md.py`         | 分割 → 向量化 → 入库 | 语义切分与文档向量化统一用本地 gme 模型             |
 | `main.py`                           | Gradio 交互界面   | 上传 PDF → 解析 → 查看每页 MD → 「存入知识库」    |
 | `milvus_db/db_retriever.py`         | 检索测试（含以图搜图）   | 内部直接调用本地 gme 嵌入                    |
 | `evaluate/evaluate_*.py`            | RAG 效果评估      | 依赖 `ragas` 包                       |
+| `graph/workflow.py`                 | 多轮对话问答（命令行）  | 须用 `python -m graph.workflow`        |
+| `graph/workflow_gradio.py`          | 多轮对话问答（界面）   | 须用 `python -m graph.workflow_gradio` |
 
 ```bash
 conda activate Multimodal_RAG
@@ -212,13 +305,19 @@ python main.py                                    # ③ Gradio 界面：上传 P
 python milvus_db/db_retriever.py                  # ④ 检索演示
 python evaluate/evaluate_single_turn.py           # ⑤ 单轮评估
 python evaluate/evaluate_multi_turn.py            # ⑥ 多轮评估
+
+python -m graph.workflow                          # ⑦ 多轮对话问答（命令行，退出输入 退出/exit/quit）
+python -m graph.workflow_gradio                   # ⑧ 多轮对话问答（Gradio 界面）
 ```
 
 - **②** 入口需指定 `md_dir` 与 `images_output_dir`，执行后完成分割、向量化并写入 Milvus。
 - **③** 界面流程：上传 PDF → 点击「解析PDF」→ 下拉框查看每页 MD → 点击「存入知识库」，
   与 **②** 等价（同样完成分割、向量化并写入 Milvus）。
 - **④** 内置演示：文本语义检索、BM25 关键词检索、RRF 混合检索、以图搜图、图文融合检索。
-- 凡会加载本地 gme 模型的入口（**②③④⑤⑥**），在**无外网环境**下建议前置两个环境变量：
+- **⑦⑧** 多轮对话问答：本地上下文库有该用户的相关记录时直接作答；**查不到会自动联网检索**，
+  并把答案写回 `t_context_collection`（联网所得记 `WebSearch`，历史上下文所得记 `AIMessage`），
+  因此同一问题问第二次通常可直接命中。两个入口共用同一套节点与图结构，改动需同步。
+- 凡会加载本地 gme 模型的入口（**②③④⑤⑥⑦⑧**），在**无外网环境**下建议前置两个环境变量：
 
 ```bash
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python main.py
@@ -242,4 +341,6 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python main.py
 - **分割**：LangChain（MarkdownHeaderTextSplitter / SemanticChunker）
 - **向量化**：gme-Qwen2-VL-2B-Instruct（本地）· DashScope multimodal-embedding-v1（云端）
 - **向量库**：Milvus 2.4+（BM25 稀疏索引 + AUTOINDEX / IP / RRF）
+- **编排**：LangGraph（多轮对话工作流：状态图 + 检查点 + 人工审批中断）
+- **联网检索**：智谱 AI `web_search`（search_pro）
 - **界面**：Gradio
