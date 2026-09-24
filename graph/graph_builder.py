@@ -23,7 +23,6 @@ import time
 import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.constants import END, START
@@ -98,70 +97,93 @@ def process_input(state: MultimodalRAGState, config: RunnableConfig):
 
 
 def first_chatbot(state: MultimodalRAGState):
-    """第一次生成回复或者决策（基于当前会话生成回复），负责触发历史上下文检索工具。"""
+    """检索决策节点：判断是否调用 search_context 检索历史对话上下文。"""
     llm_with_tools = glm_llm_flash.bind_tools(context_tools)
 
-    system_message = SystemMessage(content="""你是一名专精于 Apache Flink 的 AI 助手，可以调用工具调取与该用户的历史对话记录。
+    system_message = SystemMessage(content="""你是检索决策助手。你的唯一任务：判断是否需要调用 `search_context` 工具，检索该用户的历史对话上下文。
 
-    # 工具说明（务必准确理解）：
-    `search_context` 检索的是**该用户的历史对话上下文**（对话记忆），不是 Flink 文档知识库；
-    返回内容为过去对话中的相关片段，可能为空。
+# 工具说明：
+`search_context` 检索的是该用户的历史对话记录（对话记忆），返回过去对话中的相关片段，可能为空。
 
-    # 核心指令（必须严格遵守）：
-    1.**首要规则**：当用户提问涉及 Apache Flink 的任务技术概念、配置、代码或实践时，你**必须且只能**调用 `search_context` 工具来获取信息。
-    2.**禁止行为**：你**严禁**凭借自身内部知识直接回答任何关于 Flink 的技术问题。你的回答必须完全基于工具返回的历史对话内容。
-    3.**表述要求**：工具返回的是历史对话记录，不要把它描述成“文档”“资料”或“知识库文档”。
-    4.**兜底策略**：如果工具返回了相关信息，请基于这些信息组织答案。如果工具明确返回“没有找到相关的历史上下文信息。”，你应统一回复：“关于这个问题，我当前的历史对话记录中没有找到确切的资料。”
+# 决策规则：
+1. 消息中包含任何技术内容（技术概念、报错、配置、代码、命令、架构、实践方案等，不限技术领域）-> 必须调用 `search_context`，并把用户的问题提炼成简洁的检索关键词作为查询参数。
+2. 消息同时包含寒暄和技术问题 -> 以技术问题为准，必须调用工具。
+3. 消息是纯寒暄、问候、闲聊，或与技术无关的日常问题（如"你好""谢谢"）-> 不调用工具，直接简短回复。
 
-    # 回答流程（不可更改）：
-    用户提问 -> 调用 `search_context` 工具 -> 基于工具返回结果生成答案。
-    """)
+你只做决策：该调工具就调工具，不该调就简短回复。永远不要在回复中尝试回答技术问题。""")
 
-    return {"messages": [llm_with_tools.invoke([*state["messages"], system_message])]}
+    reply = llm_with_tools.invoke([system_message, *state["messages"]])
+
+    # 未触发工具调用 = 本轮是纯寒暄/闲聊直答。
+    # 打上标记供 save_final_answer 跳过入库：闲聊回复对检索几乎零贡献，
+    # 写进上下文库只会稀释检索结果（身份归属由 username 字段保证，不依赖闲聊内容）。
+    if not getattr(reply, "tool_calls", None):
+        return {"messages": [reply], "is_chitchat": True}
+
+    return {"messages": [reply]}
 
 
 def second_chatbot(state: MultimodalRAGState):
     """第二次生成回复：基于检索到的历史上下文作答（检索结果在 ToolMessage 里）。"""
-    return {"messages": [glm_llm_flash.invoke(state["messages"])]}
+    system_message = SystemMessage(content="""你是通用 AI 技术助理。请基于上方工具返回的历史对话内容，回答用户的技术问题。
+
+# 回答规则（必须严格遵守）：
+1. 回答必须完全基于工具返回的历史对话内容，严禁凭借自身内部知识补充技术细节。
+2. 工具返回的内容无论以什么格式呈现（如 Markdown 片段、代码块），来源都是**该用户的历史对话记录**；说明来源时表述为"根据我们之前的对话"，不要说成"文档""资料"或"知识库文档"。
+3. 如果工具明确返回"没有找到相关的历史上下文信息。"，统一回复："关于这个问题，我当前的历史对话记录中没有找到确切的资料。"
+4. 回答使用 Markdown 格式。""")
+
+    return {"messages": [glm_llm_flash.invoke([system_message, *state["messages"]])]}
+
+
+def _format_hit_time(ts) -> str:
+    """把库里的毫秒时间戳格式化成可读时间；缺失或异常时返回空串。"""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts) / 1000))
+    except (TypeError, ValueError, OSError):
+        return ""
 
 
 def third_chatbot(state: MultimodalRAGState):
     """第三次生成回复：基于 retriever_node 检索到的历史对话上下文作答。"""
-    # 从向量数据库中检索到的文本内容
+    # 从向量数据库中检索到的历史对话片段（纯文本，对话库里没有图片字段）
     context_retrieved = state.get("context_retrieved")
-    # 从向量数据库中检索到的图像 URL 路径
-    image_retrieved = state.get("image_retrieved")
 
     # 注意：retriever_node 检索的是 t_context_collection（历史对话上下文库），
     # 返回字段为 context_text / username / timestamp / message_type，
-    # 不存在 text / filename（那是文档库 t_doc_collection 的字段），切勿混用。
+    # 不存在 text / filename / image_path（那是文档库 t_doc_collection 的字段），切勿混用。
     count = 0
     context_pieces = []
     for hit in (context_retrieved or []):
         count += 1
-        content = hit.get("context_text")
-        source = hit.get("username") or "未知来源"
-        context_pieces.append(f"检索后的内容{count}：\n {content} \n 资料来源：{source}")
-    context = "\n\n".join(context_pieces) if context_pieces else "没有检索到相关的上下文信息。"
+        content = hit.get("context_text") or ""
+        when = _format_hit_time(hit.get("timestamp"))
+        # 不把 username 当"资料来源"：它是人不是资料，露给模型后容易被写进回答
+        # （出现"来源：张三"这种既无用又泄露用户名的表述）。改用时间戳做片段标识。
+        header = f"片段{count}" + (f"（{when}）" if when else "")
+        context_pieces.append(f"{header}：\n{content}")
+    context = "\n\n".join(context_pieces) if context_pieces else "（本轮未检索到相关片段）"
 
     input_text = state.get("input_text")
     input_image = state.get("input_image")
 
-    system_prompt = f"""
-        请根据用户输入和以下检索到的「历史对话上下文」生成响应。
-        注意：这些内容是从该用户的历史对话记录中检索出的片段，不是文档或知识库资料。
-        如果上下文内容中没有相关答案，请直接说明，不要自己直接输出答案。
-        要求：
-        1. 响应必须使用Markdown格式
-        2. 在响应文字下方显示所有相关图片，图片的路径列表为{image_retrieved}，使用Markdown图片语法：
-        3. 在相关图片下面的最后一行显示上下文引用来源
-        4. 如果用户还输入了图片，请也结合上下文内容，生成文本响应内容。
-        5. 如果用户还输入了文本，请结合上下文内容，生成文本响应内容。
-        6. 不要使用“知识库”“文档”“上传资料”这类字眼，统一表述为“历史对话记录”。
+    system_prompt = f"""你是通用 AI 技术助理。请严格依据下方「历史对话上下文」回答用户的问题。
 
-        历史对话上下文：
-        {context}
-        """
+# 上下文说明
+- 下方内容是检索出的、该用户历史对话中的片段，可能不完整，也可能为空。
+- 这些内容的唯一来源是「该用户的历史对话记录」。说明来源时统一表述为「根据我们之前的对话」，
+  不要称为「文档」「资料」「知识库」「上传的文件」。
+
+# 回答要求
+1. 回答必须完全基于下方上下文，严禁用你自己的内部知识补充技术细节。
+2. 若上下文为空、或与用户的问题无关，直接回复下面这句话，不要另行作答：
+   「关于这个问题，我当前的历史对话记录中没有找到确切的资料。」
+3. 输出使用 Markdown 格式。
+4. 回答的最后单独一行标注来源，格式固定为：> 来源：历史对话记录
+5. 若用户本次还提供了文本或图片，且与上下文相关，可结合上下文一起作答；不要脱离上下文自由发挥。
+
+# 历史对话上下文
+{context}"""
 
     # 构建用户消息内容
     user_content = []
@@ -170,16 +192,14 @@ def third_chatbot(state: MultimodalRAGState):
     if input_image:
         user_content.append({"type": "image_url", "image_url": {"url": input_image}})
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            ("user", user_content),
-        ]
-    )
+    # 这里刻意不用 ChatPromptTemplate：历史对话内容里出现花括号很常见（JSON、代码块），
+    # 一旦被当成模板字符串，花括号会被解析成变量占位符并抛 "missing variables" 错。
+    # 直接构造消息对象，就不存在二次模板解析这一步。
+    messages = [SystemMessage(content=system_prompt)]
+    if user_content:
+        messages.append(HumanMessage(content=user_content))
 
-    chain = prompt | glm_llm_flash
-
-    return {"messages": [chain.invoke({"context": context})]}
+    return {"messages": [glm_llm_flash.invoke(messages)]}
 
 
 def human_approval(state: MultimodalRAGState):
@@ -198,13 +218,18 @@ def fourth_chatbot(state: MultimodalRAGState):
     """
     llm_with_tools = glm_llm_flash.bind_tools(web_tools)
 
-    system_message = SystemMessage(content=(
-        "你是一个智能体助手。请**先调用 `my_search` 互联网搜索工具**获取资料，"
-        "再基于搜索结果生成回复。\n"
-        "要求：\n"
-        "1. 使用 Markdown 格式作答，并尽量标注信息来源。\n"
-        "2. 若搜索结果中没有相关内容，请如实说明「未找到相关网络资料」，不要编造。"
-    ))
+    system_message = SystemMessage(content="""你是联网检索助手。当本地历史对话不足以回答用户的问题时，由你联网查找资料作答。
+
+# 工作方式
+1. 检索阶段：如果历史消息中还没有 `my_search` 的返回结果，调用一次 `my_search`，query 填写用户本轮问题的核心关键词。
+2. 作答阶段：如果历史消息中已经出现 `my_search` 的返回结果，直接基于结果作答，**不得再次调用工具**。
+
+# 回答规则
+1. 回答必须基于搜索结果，严禁使用你自己的内部知识补充搜索结果之外的技术细节。
+2. 使用 Markdown 格式，并在开头说明「以下内容来自网络搜索」。
+3. 引用来源时只使用搜索结果中实际出现的信息；搜索结果没有给出链接时，不要编造链接、网址或文献出处。
+4. 若工具返回「没有搜索到任何内容！」，说明检索失败，请如实回复「未找到相关网络资料」，不要编造。
+5. 若用户本次还提供了文本或图片，请结合它们理解问题后再作答。""")
 
     history = [m for m in state["messages"] if not isinstance(m, SystemMessage)]
     return {"messages": [llm_with_tools.invoke([system_message, *history])]}
@@ -331,6 +356,11 @@ async def save_final_answer(state_values: dict) -> None:
 
     两个入口共用这一个函数，写入规则（来源标记、质量闸门）只维护一份。
     """
+    # 纯寒暄/闲聊轮（first_chatbot 直答、未调工具）：不入库，避免低价值内容稀释检索
+    if state_values.get("is_chitchat"):
+        log.info("本轮为寒暄/闲聊直答，跳过写入 Milvus")
+        return
+
     messages = state_values.get("messages", [])
     if not messages or not isinstance(messages[-1], AIMessage):
         log.info("最后一条消息不是 AIMessage，跳过写入 Milvus")

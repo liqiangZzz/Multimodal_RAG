@@ -20,3 +20,5 @@ class MultimodalRAGState(MessagesState):
     username: str = "ZS"  # 用户名
 
     human_answer: Optional[str] = "rejected"  # 用户是否同意 RAG 的最终响应
+
+    is_chitchat: bool = False  # 本轮是否为纯寒暄/闲聊（first_chatbot 直答未调工具），入库时据此跳过
