@@ -9,14 +9,13 @@
 """
 
 import os
-import time
 from typing import Dict, List
 
 import gradio as gr
 from gradio import ChatMessage
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from embedding.gme_qwen2_vl_2b_embedding import call_local_model, image_to_base64
+from embedding.gme_qwen2_vl_2b_embedding import image_to_base64
 from graph.graph_builder import graph, new_run_config, save_final_answer, update_state, warm_up_embedding
 from utils.log_utils import log
 
