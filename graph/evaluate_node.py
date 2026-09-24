@@ -40,6 +40,7 @@ async def evaluate_answer(state: MultimodalRAGState):
     last_message = state["messages"][-1]
     answer = last_message.content if isinstance(last_message, AIMessage) else ""
 
+    log.info(f"开始评估答案相关性：{input_text}")
     try:
         score = await asyncio.wait_for(
             rag_evaluator.evaluate_answer(input_text, [], answer),

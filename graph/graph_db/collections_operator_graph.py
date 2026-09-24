@@ -36,9 +36,7 @@ def create_store_collection():
     schema.add_field(field_name="timestamp", datatype=DataType.INT64, nullable=True)
     # 消息类型
     schema.add_field(field_name="message_type", datatype=DataType.VARCHAR, max_length=100, nullable=True)
-    # 归一化后的本轮提问，作为写库「问题级幂等」判重的等值键
-    # （由 save_context.normalize_question 生成；无提问的记录为 null，
-    #  判重时退化为内容级判据）。写入与判重两端必须共用同一个生成函数。
+    # 归一化后的提问，作为写库幂等判重的等值键（save_context.normalize_question）
     schema.add_field(field_name="question", datatype=DataType.VARCHAR, max_length=2000, nullable=True)
 
     #  稀疏向量字段

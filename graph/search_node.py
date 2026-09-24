@@ -88,6 +88,8 @@ def retriever_node(state: MultimodalRAGState):
         input_data = [{'image': state.get('input_image')}]
         # 调用API获取图像嵌入向量
         ok, embedding, status, retry_after = call_local_model(input_data)
+        #  密入向量检索：图像嵌入向量
+        # 注意：dense_search(embedding, ...) 参数顺序，向量在前
         results = retriever.dense_search(embedding, limit=3, filter_expr=filter_expr) if ok else []
     else:
         input_text = (state.get('input_text') or "").strip()
@@ -95,7 +97,9 @@ def retriever_node(state: MultimodalRAGState):
         input_data = [{'text': input_text}]
         # 调用API获取嵌入向量
         ok, embedding, status, retry_after = call_local_model(input_data)
-        # 注意：hybrid_search(query_text, query_embedding, ...) 参数顺序，文本在前、向量在后
+
+        #  混合检索：文本 + 嵌入向量
+        # 注意：hybrid_search(input_text, embedding, ...) 参数顺序，文本在前、向量在后
         results = retriever.hybrid_search(
             input_text, embedding, limit=3, filter_expr=filter_expr
         ) if ok else []
@@ -111,4 +115,7 @@ def retriever_node(state: MultimodalRAGState):
             "timestamp": entity.get("timestamp"),
             "message_type": entity.get("message_type"),
         })
+
+    # 返回检索结果
+    log.info(f"返回检索结果：{docs}")
     return {'context_retrieved': docs, 'image_retrieved': []}

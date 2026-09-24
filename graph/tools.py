@@ -101,6 +101,8 @@ async def search_context(
 
         # 6. 调用上下文相关性指标评估（外部 LLM 打分，必须有超时，见 CONTEXT_EVAL_TIMEOUT）
         t_eval = time.time()
+
+        log.info(f"开始评估上下文相关性：{query}")
         try:
             score = await asyncio.wait_for(
                 rag_evaluator.evaluate_context(query, context_pieces),
